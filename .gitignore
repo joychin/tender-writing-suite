@@ -1,0 +1,6 @@
+.DS_Store
+out-zips/
+
+# 内部上架运营材料（SkillHub / WorkBuddy 平台操作记录），不随开源仓库分发
+listing/上架指南.md
+listing/商品文案-收费款.md
