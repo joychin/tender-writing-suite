@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Review the disqualification clauses and scoring criteria, and organize them into tables"
   - "Write chapter 3 following the outline, referencing my past proposal"
-version: 1.1.8
+version: 1.1.9
 author: 灵燕智能
 ---
 

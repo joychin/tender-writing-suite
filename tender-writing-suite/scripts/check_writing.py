@@ -29,6 +29,12 @@ MD_RESIDUE = re.compile(r"^(#{1,6}\s|\||\*\*|```)")
 WEAK_MD = re.compile(r"^-\s")
 MATERIAL_TOKEN = re.compile(r"^(.+\.docx)\s+L(\d+)(?:-L?(\d+))?$")
 LEGAL_MODES = {"素材修订", "格式跟随", "推理撰写", "—"}
+
+
+def _base_name(tok_path: str) -> str:
+    """素材 token 的文件名：剥目录前缀，/ 与 \\ 都认（Windows 环境的 agent 可能
+    写反斜杠路径——Path().name 在 posix 下不认 \\，归一失效会重新绕开核对与查重）。"""
+    return re.split(r"[/\\]", tok_path)[-1]
 LEGAL_FIGURES = {"表", "分层", "甘特"}
 # 语言纪律七条的可字面匹配子集（提示不是门禁，warning 级）
 AI_FLAVOR = re.compile(
@@ -151,7 +157,7 @@ def check_guide(work: Path) -> tuple[list[str], list[str]]:
                 if not m:
                     issues.append(f"「{key}」素材列记法非法：{tok}（应为 素材文件.docx L120-L260 / 【缺】 / —）")
                     continue
-                use_key = f"{Path(m.group(1)).name}:L{m.group(2)}-L{m.group(3) or m.group(2)}"
+                use_key = f"{_base_name(m.group(1))}:L{m.group(2)}-L{m.group(3) or m.group(2)}"
                 material_use.setdefault(use_key, []).append(key)
         if figure and figure != "—":
             for tok in [t.strip() for t in figure.split("、") if t.strip()]:
@@ -203,7 +209,7 @@ def check_section(work: Path, section: Path) -> tuple[list[str], list[str]]:
                 m = MATERIAL_TOKEN.match(tok)
                 if not m:
                     continue
-                fname = Path(m.group(1)).name
+                fname = _base_name(m.group(1))
                 lo, hi = int(m.group(2)), int(m.group(3) or m.group(2))
                 src_md = work / "parse" / fname / (Path(fname).stem + ".md")
                 if not src_md.is_file():
@@ -243,7 +249,7 @@ def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]
     for p in sections:
         texts[p] = docx_text(p)
 
-    # 占位清点 + AI 腔扫描
+    # 占位清点 + AI 腔扫描 + 双章标题兜底（单节自查漏跑时收尾仍拦得住）
     n_ph = 0
     for p, (_, labeled) in texts.items():
         for loc, frag in labeled:
@@ -252,6 +258,11 @@ def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]
                     issues.append(f"{p.name}:{loc} 占位文字：{line.strip()[:40]}")
                     n_ph += 1
         warnings += scan_ai_flavor(p.stem, labeled)
+        h1 = [pp.text.strip() for pp in Document(str(p)).paragraphs
+              if (pp.style.name or "").startswith(("Heading 1", "标题 1")) and pp.text.strip()]
+        if len(h1) > 1:
+            issues.append(f"{p.name} 内有 {len(h1)} 个一级标题（{'、'.join(h1[:3])}）——"
+                          f"素材拷贝带入的源章标题未删，合册后会出现双章标题，删到只剩本节标题")
 
     # 承诺比对 + 旧值快照（清单值变更时旧值自动纳入残留扫描）
     promise_path = body_dir / "关键事实与承诺.md"
