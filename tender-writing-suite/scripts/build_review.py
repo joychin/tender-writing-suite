@@ -133,14 +133,21 @@ def _registry_payload(work: Path) -> tuple[dict, list[dict]]:
         rows = table_rows(_read(path))
         if not rows:
             continue
-        # 按表头关键词拆分同文件的多张表
+        # 按表头关键词拆分同文件的多张表；其它登记表的表头行会关闭当前表
+        # （requirements-format.md 里 MAND 表与 TPL 表相邻，不关表会把对方的行吞进来）
         tables, cur = [], None
         for r in rows:
             joined = "".join(r)
-            if any(k in c for c in r for k in header_kw) and any("出处" in c or "线索" in c for c in r):
+            is_sep = all(re.fullmatch(r":?-{2,}:?", c.strip()) for c in r if c.strip())
+            has_src = any("出处" in c or "线索" in c for c in r)
+            if any(k in c for c in r for k in header_kw) and has_src:
                 cur = {"header": [c.strip() for c in r], "rows": []}
                 tables.append(cur)
-            elif cur is not None and not all(re.fullmatch(r":?-{2,}:?", c.strip()) for c in r if c.strip()):
+            elif is_sep:
+                continue
+            elif "序号" in joined and has_src:
+                cur = None  # 另一张登记表的表头——关闭当前表
+            elif cur is not None:
                 cur["rows"].append([c.strip() for c in r])
         for t in tables:
             header = t["header"]

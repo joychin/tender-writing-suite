@@ -28,7 +28,6 @@ import os
 import re
 import secrets
 import signal
-import socket
 import sys
 import threading
 import time
@@ -114,7 +113,11 @@ def make_handler(work: Path, token: str, state: dict):
                 if not self._same_origin():
                     self._reject(403, "cross-origin request rejected")
                     return False
-                if int(self.headers.get("Content-Length") or 0) > MAX_BODY:
+                try:
+                    clen = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    clen = 0
+                if clen > MAX_BODY:
                     self._reject(413, "payload too large")
                     return False
             return True
@@ -126,12 +129,16 @@ def make_handler(work: Path, token: str, state: dict):
             if not self._guard(False):
                 return
             path = self.path[len(prefix):].split("?")[0].lstrip("/")
-            qs = dict(re.findall(r"([^?&=]+)=([^&]*)", self.path.split("?", 1)[-1])) if "?" in self.path else {}
+            qs = {k: v[0] for k, v in urllib.parse.parse_qs(self.path.split("?", 1)[-1]).items()} if "?" in self.path else {}
             if path in ("", "index.html"):
-                payload = build_review.collect_payload(work)
-                draft = _read_json(work / DRAFT_FILE)
-                payload["draft"] = draft if draft else None
-                html = build_review.render_html(payload, api_base=prefix).encode("utf-8")
+                try:
+                    payload = build_review.collect_payload(work)
+                    draft = _read_json(work / DRAFT_FILE)
+                    payload["draft"] = draft if draft else None
+                    html = build_review.render_html(payload, api_base=prefix).encode("utf-8")
+                except Exception as exc:
+                    self._json({"ok": False, "error": f"产物读取失败：{exc}"}, 500)
+                    return
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(html)))
@@ -141,8 +148,11 @@ def make_handler(work: Path, token: str, state: dict):
             elif path == "healthz":
                 self._json({"ok": True, "work": str(work), "started": state["started"]})
             elif path == "context":
-                q = {k: urllib.parse.unquote(v) for k, v in qs.items()}
-                fname, line = q.get("file", ""), int(q.get("line", 0) or 0)
+                fname = qs.get("file", "")
+                try:
+                    line = int(qs.get("line", 0) or 0)
+                except ValueError:
+                    line = 0
                 target = (parse_dir / fname).resolve() if fname else None
                 if not fname or not target or parse_dir not in target.parents or not target.is_file():
                     self._json({"ok": False, "error": "文件不在解析产物范围内或不存在"}, 404)
@@ -164,7 +174,14 @@ def make_handler(work: Path, token: str, state: dict):
                 except Exception as e:
                     self._json({"ok": False, "errors": [f"修改包不是合法 JSON：{e}"]}, 400)
                     return
-                result = apply_patch(work, patch)
+                try:
+                    result = apply_patch(work, patch)
+                except Exception as exc:
+                    self._json({"ok": False, "stage": "crash",
+                                "errors": [f"应用异常（产物保持原状或已有备份）：{exc}"]}, 500)
+                    return
+                if result.get("ok"):
+                    (work / DRAFT_FILE).unlink(missing_ok=True)  # 应用成功，待存草稿已过时
                 self._json(result, 200 if result.get("ok") else 409 if result.get("stage") == "base" else 400)
             elif path == "draft":
                 try:
@@ -183,9 +200,8 @@ def make_handler(work: Path, token: str, state: dict):
     return Handler
 
 
-def start(work: Path, idle_timeout: int) -> tuple[str, bool]:
-    """启动（或复用）服务；返回 URL 与是否新起。"""
-    import urllib.parse
+def start(work: Path, idle_timeout: int) -> tuple[str, bool, object]:
+    """启动（或复用）服务；返回 (URL, 是否新起, 服务线程)。"""
     work = work.resolve()
     spath = work / SERVE_FILE
     old = _read_json(spath) if spath.is_file() else None
@@ -259,8 +275,6 @@ def do_stop(work: Path) -> int:
 
 
 def main() -> None:
-    import urllib.parse  # noqa: F401  (handler 里 unquote 用)
-    global urllib
     ap = argparse.ArgumentParser(description="评审台本地服务（环回直写 work/ 产物）")
     ap.add_argument("--work", default="work", help="工作目录（默认 work）")
     ap.add_argument("--idle-timeout", type=int, default=7200, help="空闲自动退出秒数（默认 7200，0=不超时）")

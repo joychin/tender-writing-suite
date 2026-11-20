@@ -75,9 +75,14 @@ def _check_base(name: str, relpath: str, work: Path, patch_base: dict, errors: l
         errors.append(f"{name}文件不存在：work/{relpath}")
         return
     given = (patch_base or {}).get(name)
+    try:
+        current = _sha256(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        errors.append(f"{name}文件不是 UTF-8 文本，无法校验基底：work/{relpath}")
+        return
     if not given:
         errors.append(f"修改包缺少 {name} 基底校验值（base.{name}）——请重新生成评审台页面后再提交")
-    elif given != _sha256(path.read_text(encoding="utf-8")):
+    elif given != current:
         errors.append(f"{name}文件在评审台打开后已被外部修改（基底不符）——"
                       f"请让助手重新生成评审台；本次修改未应用（旧基底的整写会覆盖他人改动）")
 
@@ -224,20 +229,24 @@ def _parse_annotations(lines: list[str]) -> dict[int, dict]:
 
 
 def _section_spans(lines: list[str]) -> dict[int, dict[str, tuple[int, int]]]:
-    """每卷每段的行区间 [段头行, 段终点)（终点=下一段头/卷头/EOF，排他）。"""
+    """每卷每段的行区间 [段头行, 段终点)（终点=卷内下一段头/下一卷卷头/EOF，排他）。
+    段终点必须在下一卷卷头处闭合——否则本卷最后一段会吞掉后续整卷。"""
     spans: dict[int, dict[str, tuple[int, int]]] = {}
+    vol_heads: list[int] = []
     vi, sec = -1, None
     for i, ln in enumerate(lines):
         if ln.startswith("# 响应文件："):
+            vol_heads.append(i)
             vi += 1
             sec = None
         elif ln.startswith("## ") and vi >= 0:
             sec = ln[3:].strip()
             spans.setdefault(vi, {})[sec] = (i, len(lines))
-    for vmap in spans.values():
+    for vi, vmap in spans.items():
+        vol_end = vol_heads[vi + 1] if vi + 1 < len(vol_heads) else len(lines)
         ordered = sorted(vmap.items(), key=lambda kv: kv[1][0])
         for j, (sec, (start, _)) in enumerate(ordered):
-            end = ordered[j + 1][1][0] if j + 1 < len(ordered) else len(lines)
+            end = ordered[j + 1][1][0] if j + 1 < len(ordered) else vol_end
             vmap[sec] = (start, end)
     return spans
 
@@ -258,6 +267,8 @@ def regen_outline(text: str, volumes: list[dict], flags: list) -> str:
     spans = _section_spans(lines)
     repls: list[tuple[int, int, list[str]]] = []  # (start, end, 新行) start 降序应用
     for vi, vol in enumerate(volumes):
+        if "目录" not in spans.get(vi, {}):
+            raise ValueError(f"响应文件「{vol['name']}」缺少 ## 目录 段，无法回写——请让助手补全结构后再用评审台修改")
         flat = _flatten(vol["roots"])
         repls.append((spans[vi]["目录"][0], spans[vi]["目录"][1],
                       ["  " * (d - 1) + "- " + t for t, d in flat]))
@@ -310,12 +321,27 @@ def structure_flags(volumes: list[dict], flags: list, report: dict) -> None:
 
 # ---------- 表格合并（写作指引 / 承诺清单） ----------
 
+def _first_table_block(text: str) -> tuple[int, int, list[list[str]]]:
+    """文件里第一段**连续**表格块（起行, 止行排他, 行内容）。多表文件只动第一张，
+    其余表格与非表行原样保留——整文件重写会把两张表并成一团。"""
+    lines = text.split("\n")
+    tbl = [i for i, ln in enumerate(lines) if ln.strip().startswith("|")]
+    if not tbl:
+        return len(lines), len(lines), []
+    start = tbl[0]
+    end = start + 1
+    while end in tbl or end < len(lines) and lines[end].strip().startswith("|"):
+        end += 1
+    block = [lines[i] for i in range(start, end)]
+    return start, end, table_rows("\n".join(block))
+
+
 def merge_table(work: Path, relpath: str, header: list[str], fieldmap: dict[str, str],
                 entries: list[dict], key_json: str, label: str,
                 errors: list, report: dict, counter: list) -> None:
     path = work / relpath
     text = path.read_text(encoding="utf-8")
-    rows = table_rows(text)
+    start, end, rows = _first_table_block(text)
     if not rows or [c.strip() for c in rows[0][:len(header)]] != header:
         errors.append(f"{label}表头不符或表格缺失（期望 {'|'.join(header)}）：work/{relpath}")
         return
@@ -349,15 +375,16 @@ def merge_table(work: Path, relpath: str, header: list[str], fieldmap: dict[str,
             data.append(row)
             report[f"{label}_added"].append(key)
     data = [r for r in data if r is not None]
-    report["written"].append(_save_table(work, relpath, text, header, data, counter))
+    report["written"].append(_save_table(work, relpath, text, header, data, counter,
+                                         (start, end)))
 
 
 def _save_table(work: Path, relpath: str, text: str, header: list[str],
-                data: list[list[str]], counter: list) -> dict:
-    """非表格行原样保留，表格块（首行 | 到末行 |）整体重写。"""
+                data: list[list[str]], counter: list,
+                span: tuple[int, int] | None = None) -> dict:
+    """重写第一段连续表格块（span=起止行时按区间），其余行原样保留。"""
     lines = text.split("\n")
-    tbl = [i for i, ln in enumerate(lines) if ln.strip().startswith("|")]
-    start, end = (tbl[0], tbl[-1] + 1) if tbl else (len(lines), len(lines))
+    start, end = span if span else _first_table_block(text)[:2]
     body = ["| " + " | ".join(header) + " |",
             "| " + " | ".join(["---"] * len(header)) + " |"]
     body += ["| " + " | ".join(r) + " |" for r in data]
@@ -375,7 +402,7 @@ def migrate_guide_keys(work: Path, key_renames: dict[str, str], report: dict,
     if not path.is_file():
         return
     text = path.read_text(encoding="utf-8")
-    rows = table_rows(text)
+    start, end, rows = _first_table_block(text)
     if not rows:
         return
     data = [(r + [""] * len(GUIDE_HEADER))[:len(GUIDE_HEADER)] for r in rows[1:]]
@@ -391,7 +418,7 @@ def migrate_guide_keys(work: Path, key_renames: dict[str, str], report: dict,
             flags.append(f"写作指引出现重复行「{new}」——改名迁移与新增撞行，请删其一")
     if migrated:
         report["written"].append(_save_table(work, GUIDE_RELPATH, text, GUIDE_HEADER,
-                                             data, counter))
+                                             data, counter, (start, end)))
         report["guide_key_migrated"] = migrated
 
 
@@ -524,6 +551,9 @@ def apply_patch(work: Path, patch: dict) -> dict:
         volumes = _volumes(text)
         vol_index = {v["name"]: i for i, v in enumerate(volumes)}
         ann_all = _parse_annotations(text.split("\n"))
+        # 所有卷都挂注解——未列入修改包的卷也要原样回写，不能丢标注
+        for i, v in enumerate(volumes):
+            v["_annotations"] = {"src:": ann_all[i]["src:"], "desc:": ann_all[i]["desc:"]}
         for entry in tree_patch:
             vn = str(entry.get("vol", ""))
             vi = vol_index.get(vn)
@@ -531,21 +561,27 @@ def apply_patch(work: Path, patch: dict) -> dict:
                 errors.append(f"树操作指向不存在的响应文件「{vn}」（现有：{'、'.join(vol_index) or '—'}）")
                 continue
             vol = volumes[vi]
-            vol["_annotations"] = {"src:": ann_all[vi]["src:"], "desc:": ann_all[vi]["desc:"]}
             touched = {"renames": [], "added": [], "removed": [], "moved": 0}
             apply_tree_ops(vol["roots"], entry.get("ops", []), errors, vn, touched)
             vol.update({"_renames": touched["renames"], "_added": touched["added"],
                         "_removed": touched["removed"], "_moved": touched["moved"]})
         if errors:
             return {"ok": False, "stage": "tree", "errors": errors, **report}
-        staged_text = regen_outline(text, volumes, report["flags"])
+        try:
+            staged_text = regen_outline(text, volumes, report["flags"])
+        except ValueError as exc:
+            return {"ok": False, "stage": "tree", "errors": [str(exc)], **report}
         structure_flags(volumes, report["flags"], report)
 
     # 3) 指引校验（对照演算后的树；无树操作时读当前目录）
     if guide_patch:
         if not volumes:
-            cur = (work / OUTLINE_RELPATH).read_text(encoding="utf-8")
-            volumes = _volumes(cur)
+            opath = work / OUTLINE_RELPATH
+            if not opath.is_file():
+                return {"ok": False, "stage": "guide",
+                        "errors": [f"目录文件不存在：work/{OUTLINE_RELPATH}（无法校验指引节名）"],
+                        **report}
+            volumes = _volumes(opath.read_text(encoding="utf-8"))
         expected: set[str] = set()
         for vol in volumes:
             pre = f"{vol['name']}/" if len(volumes) > 1 else ""

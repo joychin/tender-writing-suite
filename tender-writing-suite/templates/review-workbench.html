@@ -529,7 +529,7 @@ function actDemote(uid) {
 /* ================= 树渲染 ================= */
 function structCount() {
   let n = 0;
-  for (const v of Object.keys(S.log)) for (const op of S.log[v]) if (op.op !== "rename") n++;
+  for (const v of Object.keys(S.log)) for (const op of S.log[v].slice(S.savedLogLen[v])) if (op.op !== "rename") n++;
   return n;
 }
 function renderStructBar() {
@@ -602,8 +602,8 @@ function renderRow(n, volName, numMap, depth, idx, parentUid) {
   line.appendChild(tw);
   if (S.treeEdit) {
     const grip = document.createElement("span"); grip.className = "grip"; grip.title = "拖拽移动：节点上/下边缘=插到同级前后，中间=并入其子节点"; grip.textContent = "⋮⋮"; grip.draggable = true;
-    grip.ondragstart = e => { e.dataTransfer.setData("text/uid", n.uid); row.classList.add("dragging"); };
-    grip.ondragend = () => row.classList.remove("dragging");
+    grip.ondragstart = e => { e.dataTransfer.setData("text/uid", n.uid); S.dragUid = n.uid; row.classList.add("dragging"); };
+    grip.ondragend = () => { row.classList.remove("dragging"); S.dragUid = null; };
     line.appendChild(grip);
   }
   const pre = document.createElement("span"); pre.className = "npre"; pre.dataset.uid = n.uid; pre.textContent = numMap[n.uid] || "";
@@ -645,7 +645,7 @@ function renderRow(n, volName, numMap, depth, idx, parentUid) {
   row.ondragover = e => {
     if (!S.treeEdit) return;
     e.preventDefault();
-    const srcUid = e.dataTransfer.getData("text/uid"); if (!srcUid || srcUid === n.uid || isAncestor(srcUid, n.uid)) return;
+    const srcUid = S.dragUid || e.dataTransfer.getData("text/uid"); if (!srcUid || srcUid === n.uid || isAncestor(srcUid, n.uid)) return;
     const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height;
     row.classList.remove("drop-above", "drop-below", "drop-inside");
     row.classList.add(y < .25 ? "drop-above" : y > .75 ? "drop-below" : "drop-inside");
@@ -655,7 +655,7 @@ function renderRow(n, volName, numMap, depth, idx, parentUid) {
     e.preventDefault();
     const cls = ["drop-above", "drop-below", "drop-inside"].find(c => row.classList.contains(c));
     row.classList.remove(...cls ? [cls] : []);
-    const srcUid = e.dataTransfer.getData("text/uid"); if (!srcUid) return;
+    const srcUid = S.dragUid || e.dataTransfer.getData("text/uid"); if (!srcUid) return;
     const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height;
     if (y < .25) actMove(srcUid, parentUid, idx);
     else if (y > .75) actMove(srcUid, parentUid, idx + 1);
@@ -1254,7 +1254,7 @@ function saveAll(after) {
   const patch = buildPatch();
   if (!patchHasBig(patch)) { if (after) after(); refreshSaveStates(); return; }
   if (S.tab === "tree" && structCount() > 0 && !S.structConfirmed) { renderStructBar(); const b = $("#struct-confirm"); if (b) { b.scrollIntoView({ behavior: "smooth", block: "center" }); b.classList.add("pulse"); toast("有结构性修改待确认：请先在确认条选择『继续保存』或『返回修改』", 1); return; } }
-  if (!S.online) { exportPatch(); return; }
+  if (!S.online) { exportPatch(); if (after) after(); return; }
   if (saving) return; saving = true;
   const els = [$("#savestate"), $("#tree-savestate"), $("#guide-savestate"), $("#promise-savestate")];
   els.forEach(e => e && setSaveState(e, "saving"));
@@ -1326,7 +1326,12 @@ $("#promise-export-btn").onclick = exportPatch;
 let draftTimer = null;
 function draftSoon() { if (!S.online) return; clearTimeout(draftTimer); draftTimer = setTimeout(draftSave, 1500); }
 function draftState() {
-  return { logs: S.log, guideDirty: S.guideDirty, guideRemoved: S.guideRemoved, promiseDirty: S.promiseDirty };
+  const logs = {};
+  for (const v of Object.keys(S.log)) {
+    const pending = S.log[v].slice(S.savedLogLen[v]);
+    if (pending.length) logs[v] = pending;
+  }
+  return { logs, guideDirty: S.guideDirty, guideRemoved: S.guideRemoved, promiseDirty: S.promiseDirty };
 }
 function draftSave() {
   if (!S.online) return;
