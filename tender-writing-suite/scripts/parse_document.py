@@ -461,6 +461,7 @@ def main() -> None:
     md_path.write_text("\n".join(L.lines), encoding="utf-8")
     ol_path.write_text(json.dumps(outline, ensure_ascii=False, indent=1), encoding="utf-8")
     if elements is not None:
+        elements = [[o, s_, min(e_, total)] for o, s_, e_ in elements]
         (out_root / (src.stem + ".elements.json")).write_text(
             json.dumps(elements, ensure_ascii=False), encoding="utf-8")
 

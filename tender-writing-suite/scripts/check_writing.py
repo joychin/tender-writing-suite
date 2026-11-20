@@ -151,7 +151,7 @@ def check_guide(work: Path) -> tuple[list[str], list[str]]:
                 if not m:
                     issues.append(f"「{key}」素材列记法非法：{tok}（应为 素材文件.docx L120-L260 / 【缺】 / —）")
                     continue
-                use_key = f"{m.group(1)}:L{m.group(2)}-L{m.group(3) or m.group(2)}"
+                use_key = f"{Path(m.group(1)).name}:L{m.group(2)}-L{m.group(3) or m.group(2)}"
                 material_use.setdefault(use_key, []).append(key)
         if figure and figure != "—":
             for tok in [t.strip() for t in figure.split("、") if t.strip()]:
@@ -185,6 +185,12 @@ def check_section(work: Path, section: Path) -> tuple[list[str], list[str]]:
                 warnings.append(f"{loc} 疑似列表残字（正文应为完整句）：{line.strip()[:40]}")
     warnings += scan_ai_flavor(section.stem, labeled)
 
+    h1 = [pp.text.strip() for pp in Document(str(section)).paragraphs
+          if (pp.style.name or "").startswith(("Heading 1", "标题 1")) and pp.text.strip()]
+    if len(h1) > 1:
+        issues.append(f"节内有 {len(h1)} 个一级标题（{'、'.join(h1[:3])}）——"
+                      f"素材拷贝带入的源章标题未删，合册后会出现双章标题，删到只剩本节标题")
+
     # 素材使用率与残留提示（从指引行取该节的素材区间）
     guide_path = work / "body" / "写作指引.md"
     leaf_title = section.stem
@@ -197,13 +203,15 @@ def check_section(work: Path, section: Path) -> tuple[list[str], list[str]]:
                 m = MATERIAL_TOKEN.match(tok)
                 if not m:
                     continue
-                fname, lo, hi = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
+                fname = Path(m.group(1)).name
+                lo, hi = int(m.group(2)), int(m.group(3) or m.group(2))
                 src_md = work / "parse" / fname / (Path(fname).stem + ".md")
                 if not src_md.is_file():
                     warnings.append(f"素材文件未解析，使用率无法核对：{tok}")
                     continue
                 lines = src_md.read_text(encoding="utf-8", errors="replace").splitlines()
                 seg = "\n".join(lines[lo - 1:hi])
+                seg = re.sub(r"^\s*\|?[\s:|-]*-{2,}[\s:|-]*$", "", seg, flags=re.M).replace("|", " ")
                 src_shingles = shingles(seg)
                 if not sec_shingles or not src_shingles:
                     continue
