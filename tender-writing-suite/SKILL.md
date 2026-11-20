@@ -19,7 +19,7 @@ examples_en:
   - "Write chapter 3 following the outline, referencing my past proposal"
   - "What materials do I need to prepare for this bid?"
   - "Plan the technical proposal outline based on the scoring criteria"
-version: 1.2.0
+version: 1.2.1
 author: 灵燕智能
 ---
 
@@ -160,7 +160,8 @@ python3 scripts/docx_toolkit.py image    "<节.docx>" --img <图片文件> [--af
 python3 scripts/docx_toolkit.py render-page <扫描件.pdf> 3 -o page3.png   # PDF 页转图（证书扫描件贴图用）
 python3 scripts/docx_toolkit.py diagram gantt.png --kind gantt --spec gantt.json
 #   真图通道（需环境有 matplotlib 且检测到中文字体；两者缺一即报错提示改用表格表达）
-#   spec：gantt={"title","unit","tasks":[{name,start,end,milestone}]}（unit 默认 周，start/end 单位随 unit，如 30 天工期用 "日"）
+#   spec：gantt={"title","unit","tasks":[{name,start,end,milestone}]}（unit 默认 周，start/end 单位随 unit，如 30 天工期用 "日"；
+#          title 可省——走 image --caption 给题注时留空，防图内外标题重复）
 #        layered={"title","layers":[{name,items:[]}]}（自上而下）
 ```
 

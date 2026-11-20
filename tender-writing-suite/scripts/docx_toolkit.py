@@ -439,49 +439,70 @@ def _content_width_twips(doc: Document) -> int:
     return 8505  # 15cm 兜底
 
 
-def _content_col_weights(hspecs, rspecs, grid_w: int) -> list[int] | None:
-    """无 widths 时的自动列宽权重：各列最长单元格字数（截到 6-50）。
-    合并格（span>1 / vm）不参与——跨列长度无法归属单列。全列无数据返回 None。"""
-    lens = [0] * grid_w
+def _col_profiles(hspecs, rspecs, grid_w: int) -> tuple[list[int], list[int]]:
+    """各列 (最长字数, 最长显示宽[半字符单位：全角2/半角1])。
+    合并格（span>1 / vm）不参与——跨列长度无法归属单列。"""
+    chars = [0] * grid_w
+    disp = [0] * grid_w
     for specs in ([hspecs] if hspecs else []) + list(rspecs):
         pos = 0
         for text, span, vm in specs:
             if span == 1 and vm is None and pos < grid_w:
-                lens[pos] = max(lens[pos], len(text.strip()))
+                t = text.strip()
+                chars[pos] = max(chars[pos], len(t))
+                disp[pos] = max(disp[pos], sum(2 if ord(ch) > 0x2E80 else 1 for ch in t))
             pos += span
-    if not any(lens):
-        return None
-    return [max(6, min(50, n)) for n in lens]
+    return chars, disp
 
 
-def _fit_widths(cols: list[int], content_tw: int) -> list[int]:
-    """列宽收口：300 dxa 下限钳保户会把总和顶过版心，「余数贴末列」会把末列
-    压成负数（corrupt 表）。版心有余照贴；已溢出时从非末列的可收空间按比例
-    收回超出量（各列保 300 下限、总宽收回版心）；全部顶到下限仍放不下时接受
-    表宽略超版心（负 dxa 才是 corrupt）。"""
+def _label_min_tw(disp_half: int, size: float, content_tw: int) -> int:
+    """短标签列（最长内容 ≤8 全角=16 半）保一行放下：字宽×字数+单元格边距。
+    真机教训：按字数给比例、300 dxa 兜底，会把「渲染比对」拆成「渲染比/对」。
+    上限 content_tw//4 防多列标签挤爆版心；长内容列回落 300（允许换行）。"""
+    if disp_half <= 0 or disp_half > 16:
+        return 300
+    return min(disp_half * int(size * 10) + 260, max(300, content_tw // 4))
+
+
+def _fit_widths(cols: list[int], content_tw: int,
+                mins: list[int] | None = None) -> list[int]:
+    """列宽收口。mins=各列下限（短标签保一行），缺省 300 兜底。
+    流程：下限总和超版心先比例缩（标签宁可折行不撑破页）→ 钳到下限 →
+    总宽超版心时从非末列按比例收回（保下限）→ 仍收不齐接受表宽略超版心
+    （负 dxa 才是 corrupt）→ 有余贴末列。"""
+    if not mins or len(mins) != len(cols):
+        mins = [300] * len(cols)
+    mins = [max(300, m) for m in mins]
+    if sum(mins) > content_tw:
+        f = content_tw / sum(mins)
+        mins = [max(300, int(m * f)) for m in mins]
+    cols = [max(c, m) for c, m in zip(cols, mins)]
     diff = content_tw - sum(cols)
     if diff >= 0:
         cols[-1] += diff  # 版心有余：余数贴末列
         return cols
-    over = -diff  # 超出量：从非末列按比例收回
-    flexible = [i for i in range(len(cols) - 1) if cols[i] > 300]
-    pool = sum(cols[i] - 300 for i in flexible)
+    over = -diff  # 超出量：从有富余的列按比例收回（含末列——钳到下限后，
+    # 富余常集中在长内容末列；mins 钳过不存在「末列欠债」形态）
+    flexible = [i for i in range(len(cols)) if cols[i] > mins[i]]
+    pool = sum(cols[i] - mins[i] for i in flexible)
     if pool:
         for i in flexible:
-            take = min(cols[i] - 300, int(over * (cols[i] - 300) / pool))
+            slack = cols[i] - mins[i]
+            take = min(slack, int(over * slack / pool))
             cols[i] -= take
             over -= take
     for i in flexible:  # 按比例取整的零头顺次补收
         if over <= 0:
             break
-        take = min(over, cols[i] - 300)
+        take = min(over, cols[i] - mins[i])
         cols[i] -= take
         over -= take
     return cols  # 仍收不齐（全顶下限）= 接受表宽略超版心
 
 
 def _grid_col_widths(blk: dict, grid_w: int, content_tw: int,
-                     auto_w: list[int] | None = None) -> list[int]:
+                     auto_w: list[int] | None = None,
+                     mins: list[int] | None = None) -> list[int]:
     weights = blk.get("widths")
     if weights:
         if len(weights) != grid_w:
@@ -491,12 +512,14 @@ def _grid_col_widths(blk: dict, grid_w: int, content_tw: int,
             weights = None
         else:
             return _fit_widths(
-                [max(300, int(content_tw * float(x) / wsum)) for x in weights], content_tw)
+                [max(300, int(content_tw * float(x) / wsum)) for x in weights],
+                content_tw, mins)
     if auto_w and len(auto_w) == grid_w and len(set(auto_w)) > 1:
         # 无 widths：按各列内容长度比例分配（长内容列变宽，评委好读）
         wsum = sum(auto_w)
-        return _fit_widths([max(300, int(content_tw * w / wsum)) for w in auto_w], content_tw)
-    return _fit_widths([max(300, content_tw // grid_w)] * grid_w, content_tw)
+        return _fit_widths([max(300, int(content_tw * w / wsum)) for w in auto_w],
+                           content_tw, mins)
+    return _fit_widths([max(300, content_tw // grid_w)] * grid_w, content_tw, mins)
 
 
 def _make_tr(specs: list[tuple[str, int, str | None]], col_w: list[int], *,
@@ -637,9 +660,11 @@ def _emit_table_inner(doc: Document, blk: dict) -> None:
         cp.paragraph_format.first_line_indent = Pt(0)
 
     content_tw = _content_width_twips(doc)
-    col_w = _grid_col_widths(blk, grid_w, content_tw,
-                             _content_col_weights(hspecs, rspecs, grid_w))
     size = 10.5 if grid_w <= 6 else (9.5 if grid_w <= 8 else 9.0)
+    chars, disp = _col_profiles(hspecs, rspecs, grid_w)
+    auto_w = [max(6, min(50, c)) for c in chars] if any(chars) else None
+    mins = [_label_min_tw(d, size, content_tw) for d in disp]
+    col_w = _grid_col_widths(blk, grid_w, content_tw, auto_w, mins)
     compact = grid_w >= 9
 
     tbl = OxmlElement("w:tbl")
@@ -1321,7 +1346,7 @@ def _apply_landscape_regions(master: Document, chapter_plan: list, landscape_tit
     页脚引用随克隆延续，页码跨节连续。"""
     if not landscape_titles:
         return
-    flags = [t in landscape_titles for (t, _, _, _) in chapter_plan]
+    flags = [t in landscape_titles for (t, _, _, _, _) in chapter_plan]
     if not any(flags):
         return
     final_sectpr = master.element.body.find(qn("w:sectPr"))
@@ -1553,7 +1578,8 @@ def cmd_assemble(args) -> None:
                     return
                 _append_container_heading(master, title, num,
                                           page_break=(depth == 1 and bool(num)))
-                chapter_plan.append((title, depth, num, in_front))
+                chapter_plan.append((title, depth, num, in_front,
+                                     str(counters[1]) if counters.get(1) else ""))
                 toc_entries.append(((num + title).strip(), depth, False))
                 merged += 1
                 for child in node["children"]:
@@ -1578,7 +1604,8 @@ def cmd_assemble(args) -> None:
                 if exists:
                     warnings.append(f"节文件内标题与目录不一致（目录：{title}）——编号未应用，"
                                     f"改节文件标题与目录逐字一致后重新合册")
-            chapter_plan.append((title, depth, num, in_front))
+            chapter_plan.append((title, depth, num, in_front,
+                                 str(counters[1]) if counters.get(1) else ""))
             toc_entries.append(((num + title).strip(), depth, not exists))
             merged += 1
 
@@ -1821,12 +1848,13 @@ def _chap_match(text: str, title: str) -> bool:
     return t == title.strip() or t.endswith(title.strip())
 
 
-def _restyle_all(master: Document, chapters: list[tuple[str, int, str, bool]],
-                 scheme: str) -> None:
+def _restyle_all(master: Document, chapters: list, scheme: str) -> None:
     """单遍重排：depth≥2 章标题降一级；节内小标题按树深度降级 + 接续节号 +
-    摘出导航大纲（outlineLvl 9，不进目录/导航窗格）。"""
+    摘出导航大纲（outlineLvl 9，不进目录/导航窗格）。扁平目录（节直接挂册下，
+    depth=1）的节内小标题同样编号（10.1 式——chapter 方案的章号是「第十章」
+    汉字形态，前缀须换 counters 的阿拉伯章号拼）。"""
     idx = 0
-    cur: tuple[str, int, bool] | None = None  # (章号, 树深, 是否前置区)
+    cur: tuple[str, int, bool, str] | None = None  # (章号, 树深, 前置区, 阿拉伯章号)
     last_chap = -1
     sub_counters: dict[int, int] = {}
     for p in master.paragraphs:
@@ -1836,12 +1864,12 @@ def _restyle_all(master: Document, chapters: list[tuple[str, int, str, bool]],
             sname = ""
         if sname in ("Heading 1", "标题 1"):
             if idx < len(chapters) and _chap_match(p.text, chapters[idx][0]):
-                title, depth, num, in_front = chapters[idx]
+                title, depth, num, in_front, arab = chapters[idx]
                 if idx != last_chap:
                     sub_counters = {}
                     last_chap = idx
                 idx += 1
-                cur = (num, depth, in_front)
+                cur = (num, depth, in_front, arab)
                 if depth >= 2:
                     try:
                         p.style = master.styles["Heading 2"]
@@ -1853,7 +1881,7 @@ def _restyle_all(master: Document, chapters: list[tuple[str, int, str, bool]],
         if cur is None or sname not in ("Heading 2", "Heading 3", "Heading 4",
                                         "标题 2", "标题 3", "标题 4"):
             continue
-        num, depth, in_front = cur
+        num, depth, in_front, arab = cur
         src_level = int(sname.split()[-1]) if sname[-1].isdigit() else 2
         target = max(2, min(depth + src_level - 1, 9))
         try:
@@ -1866,14 +1894,15 @@ def _restyle_all(master: Document, chapters: list[tuple[str, int, str, bool]],
         lvl = OxmlElement("w:outlineLvl")
         lvl.set(qn("w:val"), "8")
         ppr.append(lvl)
-        if in_front or scheme == "none" or target > 4 or depth < 2 \
+        if in_front or scheme == "none" or target > 4 or (depth < 2 and scheme == "gov") \
                 or SELF_NUMBERED.match(p.text):
             continue
         sub_counters[target] = sub_counters.get(target, 0) + 1
         for k in [k for k in sub_counters if k > target]:
             sub_counters[k] = 0
         sub = ".".join(str(sub_counters[k]) for k in range(depth + 1, target + 1))
-        _rewrite_para_text(p, f"{num.strip()}.{sub} {p.text}" if sub else f"{num.strip()} {p.text}")
+        prefix = arab if (depth == 1 and scheme == "chapter" and arab) else num.strip()
+        _rewrite_para_text(p, f"{prefix}.{sub} {p.text}" if sub else f"{prefix} {p.text}")
 
 
 def _merge_comments(master: Document, used_files: set[Path]) -> int:
@@ -2297,8 +2326,9 @@ def main() -> None:
     sp.add_argument("out", help="输出 PNG 路径")
     sp.add_argument("--kind", choices=["gantt", "layered"], required=True)
     sp.add_argument("--spec", required=True,
-                    help="spec JSON：gantt={title,unit?,tasks:[{name,start,end,milestone}]}（unit 默认 周，start/end 单位随 unit）；"
-                         "layered={title,layers:[{name,items:[]}]}（自上而下）")
+                    help="spec JSON：gantt={title?,unit?,tasks:[{name,start,end,milestone}]}（title 可省——"
+                         "配 image --caption 时留空防图内外标题重复；unit 默认 周，start/end 单位随 unit）；"
+                         "layered={title?,layers:[{name,items:[]}]}（自上而下）")
     sp.set_defaults(func=cmd_diagram)
 
     sp = sub.add_parser("toc-pages", help="给合册文件的静态目录条目写入实测页码（需 LibreOffice）")

@@ -56,16 +56,22 @@ def norm(s: str) -> str:
 
 
 def digit_seq_hit(value: str, texts: list[str]) -> bool:
-    """承诺比对宽松复核：值里的数字序列按原顺序出现在任一正文里（空格/标点/
-    同义前后缀差异放行，如「每天10万对」↔「日均 10 万对」、「7×24」↔「7*24」）。
-    值无数字（纯文字承诺）不算命中——无信号可核。"""
-    seq = re.findall(r"\d+(?:\.\d+)?", value)
-    if not seq:
+    """承诺比对宽松复核：数字序列按原顺序出现在任一正文里，且值中紧随数字的
+    量词在正文同一处近旁出现（「30分钟」不放过正文「30天」——数字同、量词异
+    是真差异）。单数字值（1名/5人）信号太弱不做宽松放行，纯文字值不算命中
+    ——真漏写不能被洗成黄色提醒（真机教训：8 条写法差异告警里混着真实漏写）。"""
+    runs = re.findall(r"\d+(?:\.\d+)?", value)
+    if not runs or sum(len(d) for d in runs) < 2:
         return False
+    pairs = [(m.group(1), m.group(2)) for m in
+             re.finditer(r"(\d+(?:\.\d+)?)([\u4e00-\u9fff]{1,2})", value)]
     for t in texts:
         tseq = re.findall(r"\d+(?:\.\d+)?", t)
         it = iter(tseq)
-        if all(any(d == x for x in it) for d in seq):
+        if not all(any(d == x for x in it) for d in runs):
+            continue
+        if all(re.search(re.escape(d) + r"[^\d]{0,4}" + re.escape(u), t)
+               for d, u in pairs):
             return True
     return False
 
