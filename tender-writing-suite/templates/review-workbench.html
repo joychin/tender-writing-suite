@@ -1,0 +1,1403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>标书评审台</title>
+<style>
+/* ===== 基底（自包含，无外部依赖；视觉对照桌面版 token：brand 青/danger 红/info 蓝/warning 琥珀） ===== */
+:root{
+  --brand:#0F766E; --brand-soft:#0F766E14; --danger:#B91C1C; --danger-soft:#B91C1C0F;
+  --info:#1D4ED8; --info-soft:#1D4ED812; --warn:#B45309; --warn-soft:#B453091A;
+  --ok:#15803D; --ok-soft:#15803D12;
+  --ink:#1F2937; --ink-2:#6B7280; --ink-3:#9CA3AF;
+  --line:#E5E7EB; --line-soft:#F3F4F6; --canvas:#F8FAFC; --card:#FFFFFF;
+  --r-lg:12px; --r-md:8px; --r-sm:4px;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+html,body{margin:0;padding:0}
+body{font:14px/1.55 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--canvas)}
+button{font:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select,textarea{font:inherit;color:var(--ink)}
+code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:1px 5px;border-radius:var(--r-sm)}
+.num{font-variant-numeric:tabular-nums}
+/* ===== 顶栏 ===== */
+.topbar{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:40}
+.topbar h1{font-size:15px;margin:0;font-weight:600}
+.topbar .proj{color:var(--ink-2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:34vw}
+.topbar .spacer{flex:1}
+.conn{font-size:12px;padding:2px 10px;border-radius:999px;background:var(--ok-soft);color:var(--ok)}
+.conn.off{background:var(--warn-soft);color:var(--warn)}
+.savestate{font-size:12px;color:var(--ink-2);display:inline-flex;align-items:center;gap:6px}
+.savestate .dot{width:7px;height:7px;border-radius:50%;background:var(--warn)}
+.savestate.saved .dot{background:var(--ok)}
+.savestate.saving .dot{background:var(--ink-3);animation:spin 1s linear infinite}
+.savestate.error{color:var(--danger)}
+.savestate .retry{text-decoration:underline;color:var(--danger)}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* ===== Tab ===== */
+.tabs{display:flex;gap:4px;padding:8px 16px 0;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:49px;z-index:39}
+.tabs button{padding:7px 14px;border-radius:var(--r-md) var(--r-md) 0 0;color:var(--ink-2);font-size:13px;border-bottom:2px solid transparent}
+.tabs button.active{color:var(--brand);font-weight:600;border-bottom-color:var(--brand)}
+.tabs button .cnt{font-size:11px;background:var(--line-soft);border-radius:999px;padding:0 6px;margin-left:4px;color:var(--ink-2)}
+.panel{display:none;padding:16px;max-width:1280px;margin:0 auto}
+.panel.active{display:block}
+/* ===== 通用块 ===== */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:14px 16px;margin-bottom:14px}
+.card h3{margin:0 0 10px;font-size:13px;color:var(--ink);font-weight:600;display:flex;align-items:center;gap:8px}
+.card h3 .sub{color:var(--ink-3);font-weight:400;font-size:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:12px 14px}
+.kpi.alert{border-color:var(--danger)}
+.kpi .v{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums}
+.kpi .l{font-size:12px;color:var(--ink-2);margin-top:2px}
+.kpi .n{font-size:12px;margin-top:4px;color:var(--warn)}
+.kpi.alert .n{color:var(--danger)}
+.muted{color:var(--ink-2)} .small{font-size:12px} .mono{font-family:var(--mono);font-size:12px}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:var(--r-md);border:1px solid var(--line);background:var(--card);font-size:13px}
+.btn:hover{background:var(--line-soft)}
+.btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+.btn.primary:hover{opacity:.92;background:var(--brand)}
+.btn.warn{background:var(--warn);border-color:var(--warn);color:#fff}
+.btn.danger{color:var(--danger);border-color:var(--danger)}
+.btn.ghost{border-color:transparent}
+.btn.sm{padding:2px 8px;font-size:12px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.banner{display:flex;align-items:flex-start;gap:8px;border:1px solid #FDE68A;background:var(--warn-soft);border-radius:var(--r-md);padding:10px 12px;font-size:12px;margin-bottom:12px;color:var(--ink)}
+.banner.danger{border-color:#FCA5A5;background:var(--danger-soft)}
+.banner.info{border-color:#93C5FD;background:var(--info-soft)}
+.banner .spacer{flex:1}
+/* 徽章（四色，对照桌面版） */
+.badge{display:inline-block;font-size:10px;font-weight:500;padding:0 6px;line-height:18px;border-radius:var(--r-sm);cursor:pointer;white-space:nowrap}
+.badge.MAND{color:var(--danger);background:var(--danger-soft)}
+.badge.TPL{color:var(--info);background:var(--info-soft)}
+.badge.REQ{color:var(--brand);background:var(--brand-soft)}
+.badge.SCORE{color:var(--warn);background:var(--warn-soft)}
+.chip{display:inline-block;font-size:11px;padding:0 8px;line-height:20px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2);white-space:nowrap}
+.chip.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-soft)}
+.chip.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-soft)}
+.chip.brand{color:var(--brand);border-color:var(--brand);background:var(--brand-soft)}
+/* ===== 总览 ===== */
+.parse-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.parse-file{border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px}
+.parse-file .fn{font-weight:600;font-size:13px;word-break:break-all}
+.parse-file .warn{color:var(--warn);font-size:12px;margin-top:4px}
+.clar-item{border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-bottom:10px}
+.clar-item .q{font-weight:600;font-size:13px}
+.clar-item .meta{font-size:12px;color:var(--ink-2);margin:4px 0 8px}
+.clar-item .act{background:var(--line-soft);border-radius:var(--r-sm);padding:6px 10px;font-size:12px;margin-bottom:8px}
+.clar-item.verdicted{opacity:.75}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opts label{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--r-md);font-size:13px;cursor:pointer}
+.opts label:hover{background:var(--line-soft)}
+.opts input{accent-color:var(--brand)}
+.gate-row{display:flex;flex-wrap:wrap;gap:8px}
+.gate{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:var(--r-md);padding:6px 10px;font-size:12px}
+.gate .st{font-size:11px;padding:0 8px;border-radius:999px;line-height:18px;background:var(--line-soft);color:var(--ink-3)}
+.gate.pass .st{background:var(--ok-soft);color:var(--ok)}
+/* ===== 目录树 ===== */
+.tree-tools{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.tree-tools input[type=search]{flex:0 1 220px;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r-md)}
+.matchcnt{font-size:12px;color:var(--ink-2)}
+.vol{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);margin-bottom:14px}
+.vol-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.vol-head .vn{font-weight:600;font-size:14px}
+.vol-head .vc{font-size:12px;color:var(--ink-2)}
+.vol-head .info-btn{width:20px;height:20px;border-radius:50%;border:1px solid var(--line);color:var(--ink-2);font-size:11px;line-height:1;text-align:center}
+.legend{padding:8px 14px;background:var(--line-soft);font-size:12px;color:var(--ink-2);display:flex;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.scope{padding:8px 14px;font-size:12px;color:var(--ink-2)}
+.rows{padding:6px 8px 10px}
+.row{position:relative;border-radius:var(--r-md)}
+.row .line{display:flex;align-items:center;gap:4px;min-height:30px;padding:2px 6px;border-radius:var(--r-md)}
+.row .line:hover{background:var(--line-soft)}
+.row.drop-above>.line{box-shadow:inset 0 2px 0 var(--brand)}
+.row.drop-below>.line{box-shadow:inset 0 -2px 0 var(--brand)}
+.row.drop-inside>.line{outline:2px solid var(--brand);background:var(--brand-soft)}
+.row.dragging{opacity:.4}
+.row .tw{width:18px;flex:none;color:var(--ink-3);cursor:pointer;font-size:10px;text-align:center}
+.row .tw.nofill{visibility:hidden}
+.row .grip{cursor:grab;color:var(--ink-3);font-size:12px;padding:0 2px;user-select:none}
+.row .nm{cursor:default}
+.row .nm input{width:280px;padding:2px 6px;border:1px solid var(--brand);border-radius:var(--r-sm)}
+.row .npre{font-size:11px;color:var(--ink-3);font-family:var(--mono);min-width:52px}
+.row .ovl{font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px;margin-left:8px}
+.rowbtns{display:none;margin-left:auto;gap:2px}
+.row .line:hover .rowbtns{display:flex}
+.rowbtns button{width:24px;height:24px;border-radius:var(--r-sm);color:var(--ink-2);font-size:12px;line-height:1}
+.rowbtns button:hover{background:var(--line);color:var(--ink)}
+.rowbtns button.rb-del.arm{background:var(--danger);color:#fff}
+.kids{margin-left:18px;border-left:1px dashed var(--line);padding-left:6px}
+.ctxmenu{position:fixed;z-index:100;background:var(--card);border:1px solid var(--line);border-radius:var(--r-md);box-shadow:0 8px 24px #0002;min-width:160px;padding:4px}
+.ctxmenu button{display:block;width:100%;text-align:left;padding:6px 12px;border-radius:var(--r-sm);font-size:13px}
+.ctxmenu button:hover{background:var(--line-soft)}
+.ctxmenu button:disabled{opacity:.35}
+.ctxmenu button.danger{color:var(--danger)}
+.ctxmenu button.danger:hover{background:var(--danger-soft)}
+.structbar{border:1px solid #FDE68A;background:var(--warn-soft);border-radius:var(--r-md);padding:10px 12px;font-size:12px;margin-bottom:12px}
+.structbar.pulse{animation:pulse .45s ease 3}
+@keyframes pulse{50%{outline:2px solid var(--warn)}}
+/* ===== 溯源弹窗 ===== */
+.mask{position:fixed;inset:0;background:#0008;z-index:90;display:flex;align-items:flex-start;justify-content:center;padding:8vh 16px}
+.modal{background:var(--card);border-radius:var(--r-lg);max-width:640px;width:100%;max-height:76vh;overflow:auto;padding:16px 18px}
+.modal h4{margin:0 0 4px;font-size:14px}
+.modal .close{position:sticky;float:right;top:0;font-size:16px;color:var(--ink-3)}
+.modal .srctext{border-left:3px solid var(--line);background:var(--line-soft);padding:8px 12px;border-radius:var(--r-sm);font-size:13px;margin:10px 0;white-space:pre-wrap}
+.ctxblk{border:1px solid var(--line);border-radius:var(--r-md);margin-top:10px;max-height:280px;overflow:auto;font-family:var(--mono);font-size:12px}
+.ctxblk .cl{display:flex;gap:10px;padding:1px 10px;white-space:pre-wrap}
+.ctxblk .cl .no{color:var(--ink-3);min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
+.ctxblk .cl.hit{background:var(--brand-soft);color:var(--brand);font-weight:600}
+/* ===== 写作指引 ===== */
+.gwrap{display:flex;gap:14px;align-items:flex-start}
+.gtree{flex:0 0 34%;min-width:240px;max-width:340px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:10px}
+.gtree .search{width:100%;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r-md);margin-bottom:8px}
+.pills{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.pills button{font-size:11px;padding:2px 10px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2)}
+.pills button.active{background:var(--brand);border-color:var(--brand);color:#fff}
+.pills button.warnpill{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
+.pills button.okpill{border-color:var(--ok);color:var(--ok);background:var(--ok-soft)}
+.pills button:disabled{opacity:.35}
+.gnode{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:var(--r-sm);cursor:pointer;font-size:13px}
+.gnode:hover{background:var(--line-soft)}
+.gnode.sel{background:var(--brand-soft);color:var(--brand);font-weight:600}
+.gnode .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.dot.pending{background:var(--ink-3)}
+.dot.unassigned{background:transparent;border:1.5px dashed var(--ink-3)}
+.dot.ok{background:var(--ok)}
+.dot.warn{background:var(--warn)}
+.gdetail{flex:1;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:14px 16px}
+.gdetail h3{margin:0 0 2px;font-size:15px}
+.block{margin-top:14px}
+.block .bt{font-size:12px;color:var(--ink-2);font-weight:600;margin-bottom:6px}
+.kvrow{font-size:13px;margin:2px 0}
+.kvrow .k{color:var(--ink-2);display:inline-block;min-width:76px}
+.modechips{display:flex;flex-wrap:wrap;gap:8px}
+.modechips button{font-size:12px;padding:3px 12px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2)}
+.modechips button.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.modechips button.excl.on{background:var(--warn);border-color:var(--warn)}
+.gdetail input[type=text],.gdetail textarea{width:100%;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r-md);font-size:13px}
+.gdetail input.bad{border-color:var(--danger);background:var(--danger-soft)}
+.gdetail textarea{min-height:60px;resize:vertical}
+.ferr{color:var(--danger);font-size:12px;margin-top:3px}
+.basisrow{border:1px solid var(--line);border-radius:var(--r-md);padding:8px 10px;margin-top:6px;font-size:12px}
+.basisrow .bid{margin-right:6px}
+.basisrow .quote{color:var(--ink);margin-top:2px}
+.basisrow .src{color:var(--ink-3);margin-top:2px}
+.stance{display:inline-block;font-size:11px;padding:0 8px;line-height:20px;border-radius:var(--r-sm);background:var(--warn-soft);color:var(--warn);font-weight:600;margin-right:8px}
+.notegroups .ng{margin-top:8px}
+.notegroups .ng .nt{font-size:12px;font-weight:600;margin-bottom:3px}
+.notegroups .warn .nt{color:var(--warn)}
+.notegroups .info .nt{color:var(--info)}
+/* ===== 承诺 ===== */
+.principle{border:1px solid #FDE68A;background:var(--warn-soft);border-radius:var(--r-md);padding:10px 14px;font-size:13px;margin-bottom:14px}
+.promise{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:14px 16px;margin-bottom:12px}
+.promise.pending{border-color:var(--warn);background:#FFFBEB}
+.promise .head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.promise .item{font-weight:600;font-size:14px}
+.promise .st{font-size:11px;padding:0 8px;border-radius:999px;line-height:18px}
+.promise.filled .st{background:var(--ok-soft);color:var(--ok)}
+.promise.pending .st{background:var(--warn-soft);color:var(--warn)}
+.promise .body{display:flex;gap:14px;flex-wrap:wrap}
+.promise .col{flex:1 1 260px;min-width:240px}
+.promise .col .ct{font-size:12px;color:var(--ink-2);font-weight:600;margin-bottom:4px}
+.promise input[type=text]{width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:var(--r-md)}
+.promise input.bad{border-color:var(--danger)}
+.promise .note{font-size:12px;color:var(--ink-2);margin-top:4px}
+/* ===== toast / 弹层 ===== */
+.toasts{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:120;display:flex;flex-direction:column;gap:8px;align-items:center}
+.toast{background:var(--ink);color:#fff;border-radius:var(--r-md);padding:8px 16px;font-size:13px;max-width:70vw}
+.toast.err{background:var(--danger)}
+.report li{margin:3px 0;font-size:13px}
+.report .sec{font-weight:600;margin-top:10px;font-size:13px}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>标书评审台</h1>
+  <span class="proj" id="proj"></span>
+  <span class="spacer"></span>
+  <span class="savestate" id="savestate" hidden><span class="dot"></span><span id="savesxt"></span></span>
+  <span class="conn" id="conn">检测连接…</span>
+</header>
+
+<nav class="tabs" id="tabs" role="tablist">
+  <button data-tab="overview" class="active">总览</button>
+  <button data-tab="tree">目录树<span class="cnt" id="cnt-tree"></span></button>
+  <button data-tab="guide">写作指引<span class="cnt" id="cnt-guide"></span></button>
+  <button data-tab="promise">承诺清单<span class="cnt" id="cnt-promise"></span></button>
+</nav>
+
+<!-- 总览 -->
+<section class="panel active" id="panel-overview">
+  <div id="ov-banner"></div>
+  <div class="kpis" id="kpis"></div>
+  <div class="card"><h3>确认门进度 <span class="sub">连续模式下由助手越门汇报，你可在此补确认</span></h3><div class="gate-row" id="gates"></div></div>
+  <div class="card"><h3>解析概况 <span class="sub" id="parse-sub"></span></h3><div class="parse-grid" id="parse"></div></div>
+  <div class="card"><h3>评分项与覆盖 <span class="sub" id="score-sub"></span></h3><div id="scores"></div></div>
+  <div class="card"><h3>废标条款 <span class="sub" id="disq-sub"></span></h3><div id="disq"></div></div>
+  <div class="card"><h3>待澄清问卷 <span class="sub">逐条裁决，裁决即记录进澄清清单与确认台账</span></h3><div id="clar"></div></div>
+</section>
+
+<!-- 目录树 -->
+<section class="panel" id="panel-tree">
+  <div id="tree-banner"></div>
+  <div class="tree-tools">
+    <button class="btn primary" id="tree-edit-btn">编辑目录</button>
+    <button class="btn" id="tree-done-btn" hidden>完成编辑</button>
+    <span class="savestate" id="tree-savestate" hidden><span class="dot"></span><span></span></span>
+    <span id="tree-hint" class="small muted" hidden>拖拽移动（上/下插入、中间并入） · 右键更多操作</span>
+    <span class="spacer" style="flex:1"></span>
+    <span class="matchcnt" id="tree-match" hidden></span>
+    <input type="search" id="tree-search" placeholder="搜索目录…">
+    <select id="num-sel" title="编号在生成整本 Word 时套用；此处目录树实时预览编号效果">
+      <option value="chapter">第一章 + 1.1</option>
+      <option value="decimal">1 + 1.1</option>
+      <option value="gov">一、（一）1.</option>
+      <option value="none">不编号</option>
+    </select>
+  </div>
+  <div id="structbar-slot"></div>
+  <div id="volumes"></div>
+</section>
+
+<!-- 写作指引 -->
+<section class="panel" id="panel-guide">
+  <div id="guide-banner"></div>
+  <div class="tree-tools">
+    <button class="btn primary" id="guide-edit-btn">编辑指引</button>
+    <button class="btn primary" id="guide-done-btn" hidden>完成编辑</button>
+    <span class="savestate" id="guide-savestate" hidden><span class="dot"></span><span></span></span>
+    <span class="spacer" style="flex:1"></span>
+    <button class="btn" id="guide-export-btn" hidden>导出修改包</button>
+  </div>
+  <div class="gwrap">
+    <div class="gtree">
+      <input type="search" class="search" id="guide-search" placeholder="搜索章节">
+      <div class="pills" id="guide-pills"></div>
+      <div id="guide-tree"></div>
+      <div id="guide-offtree"></div>
+    </div>
+    <div class="gdetail" id="guide-detail"></div>
+  </div>
+</section>
+
+<!-- 承诺清单 -->
+<section class="panel" id="panel-promise">
+  <div class="principle">⚖️ 承诺有法律后果——AI 不生成承诺，只做三件事：找到约束、给出建议、说清依据。拍板权永远在你。</div>
+  <div class="tree-tools">
+    <button class="btn primary" id="promise-edit-btn">填写 / 调整</button>
+    <button class="btn primary" id="promise-done-btn" hidden>完成</button>
+    <span class="savestate" id="promise-savestate" hidden><span class="dot"></span><span></span></span>
+    <span class="spacer" style="flex:1"></span>
+    <button class="btn" id="promise-export-btn" hidden>导出修改包</button>
+  </div>
+  <div id="promises"></div>
+</section>
+
+<div class="toasts" id="toasts"></div>
+<div id="modal-slot"></div>
+
+<script type="application/json" id="review-data">__REVIEW_DATA__</script>
+<script>
+"use strict";
+/* ================= 数据与状态 ================= */
+const DATA = JSON.parse(document.getElementById("review-data").textContent);
+const API = "__REVIEW_API__";               // "" = 离线（file://）；"/<token>/" = 服务模式
+const ONLINE = API !== "";
+const $ = s => document.querySelector(s);
+const MAX_LEVEL = 5, HISTORY_LIMIT = 50;
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const cp = o => JSON.parse(JSON.stringify(o));
+const uidc = (() => { let i = 0; return () => "x" + (++i); })();
+
+const S = {
+  tab: "overview", vol: {}, expanded: new Set(), undo: [], redo: [],
+  log: {},                                     // vol -> [ops]
+  treeEdit: false, numScheme: "chapter", treeSearch: "", structConfirmed: false,
+  savedLogLen: {}, guideSel: null, guideEdit: false, guideFilter: "all", guideSearch: "",
+  guideDirty: {}, guideRemoved: {},            // key -> {field:val} / key -> true
+  promiseEdit: false, promiseDirty: {},
+  savedGuide: false, savedPromise: false,
+  online: ONLINE,
+};
+for (const v of DATA.volumes) {
+  S.vol[v.name] = { nodes: reuid(v.nodes) };
+  S.log[v.name] = [];
+  S.savedLogLen[v.name] = 0;
+  (function open1(list) { for (const n of list) { if (n.depth !== undefined ? n.depth <= 1 : true) { S.expanded.add(n.uid); open1(n.children); } } })(S.vol[v.name].nodes);
+}
+function reuid(list, p = "") {
+  return list.map((n, i) => ({ uid: p ? p + "/" + i : String(i), text: n.text,
+    src: n.src || [], desc: n.desc || null, children: reuid(n.children || [], (p ? p + "/" : "") + i) }));
+}
+
+/* ================= 基础 UI ================= */
+function toast(msg, err) {
+  const t = document.createElement("div");
+  t.className = "toast" + (err ? " err" : ""); t.textContent = msg;
+  $("#toasts").appendChild(t);
+  setTimeout(() => t.remove(), err ? 5200 : 3200);
+}
+function setSaveState(el, st, extra) {
+  if (!st) { el.hidden = true; return; }
+  el.hidden = false;
+  el.className = "savestate " + (st === "saved" ? "saved" : st === "saving" ? "saving" : st === "error" ? "error" : "");
+  const t = el.querySelector("span:last-child");
+  if (st === "saving") t.textContent = "保存中…";
+  else if (st === "dirty") t.textContent = "未保存";
+  else if (st === "saved") t.textContent = "已保存 · " + (extra || "刚刚");
+  else if (st === "error") { t.textContent = "保存失败 · "; const b = document.createElement("button"); b.className = "retry"; b.textContent = "点击重试"; b.onclick = () => saveAll(); t.appendChild(b); }
+  else if (st === "conflict") t.textContent = "有新版本 · 请在上方提示中选择";
+}
+function dirtyState() {
+  const tDirty = Object.keys(S.vol).some(v => S.log[v].length > S.savedLogLen[v]);
+  const gDirty = Object.keys(S.guideDirty).length > 0 || Object.keys(S.guideRemoved).length > 0;
+  const pDirty = Object.keys(S.promiseDirty).length > 0;
+  return { tDirty, gDirty, pDirty, any: tDirty || gDirty || pDirty };
+}
+function refreshSaveStates() {
+  const d = dirtyState();
+  const els = [["#savestate", d.any], ["#tree-savestate", d.tDirty], ["#guide-savestate", d.gDirty], ["#promise-savestate", d.pDirty]];
+  for (const [sel, dirty] of els) { const el = $(sel); if (el) setSaveState(el, dirty ? "dirty" : (S.lastSaved ? "saved" : ""), dirty ? "" : S.lastSaved); }
+  if (!d.any && S.lastSaved) { const el = $("#savestate"); setSaveState(el, "saved", S.lastSaved); }
+}
+function tabCount() {
+  let leaves = 0, rows = DATA.guide.rows.length;
+  for (const v of DATA.volumes) (function w(ns) { for (const n of ns) { if (!n.children.length) leaves++; w(n.children); } })(S.vol[v.name].nodes);
+  $("#cnt-tree").textContent = leaves;
+  $("#cnt-guide").textContent = rows;
+  $("#cnt-promise").textContent = DATA.promise.rows.length;
+}
+function switchTab(name) {
+  S.tab = name;
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + name));
+  history.replaceState(null, "", "#tab=" + name);
+}
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+
+/* ================= 编号预览 ================= */
+const CN = "一二三四五六七八九十";
+function cnNum(n) { if (n <= 10) return CN[n - 1] || String(n); if (n < 20) return "十" + (n % 10 ? CN[n % 10 - 1] : ""); return CN[Math.floor(n / 10) - 1] + "十" + (n % 10 ? CN[n % 10 - 1] : ""); }
+function numberingMap(volName) {
+  const map = {}; const counters = [0, 0, 0, 0, 0]; let inFront = true;
+  (function walk(list, depth) {
+    let sib = 0;
+    for (const n of list) {
+      sib++;
+      if (inFront && n.text === "目录") { inFront = false; map[n.uid] = ""; walk(n.children, depth + 1); continue; }
+      if (inFront) { map[n.uid] = ""; walk(n.children, depth + 1); continue; }
+      for (let i = depth; i < 5; i++) counters[i] = 0;
+      counters[depth - 1] = sib;
+      if (S.numScheme === "none") map[n.uid] = "";
+      else if (S.numScheme === "chapter") map[n.uid] = depth === 1 ? "第" + cnNum(counters[0]) + "章" : counters.slice(0, depth).join(".");
+      else if (S.numScheme === "decimal") map[n.uid] = counters.slice(0, depth).join(".");
+      else map[n.uid] = depth === 1 ? cnNum(counters[0]) + "、" : depth === 2 ? "（" + cnNum(counters[1]) + "）" : counters.slice(0, depth).join(".");
+      walk(n.children, depth + 1);
+    }
+  })(S.vol[volName].nodes, 1);
+  return map;
+}
+
+function refreshNumbering() {
+  for (const v of DATA.volumes) {
+    const m = numberingMap(v.name);
+    document.querySelectorAll(`[data-vol="${CSS.escape(v.name)}"] .npre`).forEach(el => {
+      el.textContent = m[el.dataset.uid] || ""; el.style.visibility = m[el.dataset.uid] ? "visible" : "hidden";
+    });
+  }
+}
+$("#num-sel").onchange = e => { S.numScheme = e.target.value; refreshNumbering(); };
+
+/* ================= 树：查找 / 动作 / 日志 ================= */
+/* 身份与寻址分离：uid 只作身份（服务端节点=构建路径串，新节点=x 序号），
+   路径/父级/兄弟一律经 locate() 走树取得。 */
+function locate(uid, volName) {
+  for (const vn of Object.keys(S.vol)) {
+    if (volName && vn !== volName) continue;
+    const found = (function w(list, path) {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].uid === uid) return { node: list[i], path: [...path, i], parent: null, parentPath: [], index: i };
+        const sub = w(list[i].children, [...path, i]);
+        if (sub) {
+          if (sub.parent === null) { sub.parent = list[i]; sub.parentPath = [...path, i]; }
+          return sub;
+        }
+      }
+      return null;
+    })(S.vol[vn].nodes, []);
+    if (found) return { vol: vn, ...found };
+  }
+  return null;
+}
+function findNode(uid, volName) { const l = locate(uid, volName); return l ? { vol: l.vol, node: l.node, path: l.path } : null; }
+function isAncestor(ancUid, uid) {
+  const a = locate(ancUid); if (!a) return false;
+  return (function w(ns) { for (const n of ns) { if (n.uid === uid) return true; if (w(n.children)) return true; } return false; })(a.node.children);
+}
+function sibsOf(loc) { return loc.parent ? loc.parent.children : S.vol[loc.vol].nodes; }
+function snap() {
+  S.undo.push({ tree: cp(Object.fromEntries(Object.entries(S.vol).map(([k, v]) => [k, v.nodes]))), log: cp(S.log) });
+  if (S.undo.length > HISTORY_LIMIT) S.undo.shift();
+  S.redo = [];
+}
+function stateNow() { return { tree: Object.fromEntries(Object.entries(S.vol).map(([k, v]) => [k, v.nodes])), log: S.log }; }
+function doUndo() {
+  const s = S.undo.pop(); if (!s) return;
+  S.redo.push(stateNow());
+  for (const k of Object.keys(S.vol)) { S.vol[k].nodes = s.tree[k]; S.log[k] = s.log[k]; }
+  renderVolumes(); refreshNumbering(); toast("已撤销");
+}
+function doRedo() {
+  const s = S.redo.pop(); if (!s) return;
+  S.undo.push(stateNow());
+  for (const k of Object.keys(S.vol)) { S.vol[k].nodes = s.tree[k]; S.log[k] = s.log[k]; }
+  renderVolumes(); refreshNumbering();
+}
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && S.treeEdit) {
+    e.preventDefault(); if (e.shiftKey) doRedo(); else doUndo();
+  }
+});
+function pushLog(volName, op) { S.log[volName].push(op); renderVolumes(); refreshNumbering(); refreshSaveStates(); draftSoon(); }
+function actRename(uid, text) { const f = findNode(uid); if (!f || !text.trim()) return; snap(); f.node.text = text.trim(); pushLog(f.vol, { op: "rename", path: f.path, text: text.trim() }); }
+function actAdd(parentUid, index, volName) {
+  let sibs, parentPath = [], vol, childDepth = 1;
+  if (parentUid) {
+    const p = locate(parentUid); if (!p) return;
+    childDepth = p.path.length + 1;
+    if (childDepth > MAX_LEVEL) return toast("层级封顶 5 级，不能再加子级", 1);
+    sibs = p.node.children; parentPath = p.path; vol = p.vol;
+  } else { vol = volName || DATA.volumes[0].name; sibs = S.vol[vol].nodes; }
+  const idx = Math.max(0, Math.min(index ?? sibs.length, sibs.length));
+  snap();
+  sibs.splice(idx, 0, { uid: uidc(), text: "新章节", src: [], desc: null, children: [] });
+  pushLog(vol, { op: "add", parent: parentPath, index: idx, text: "新章节" });
+  if (parentUid) S.expanded.add(parentUid);
+}
+function actRemove(uid) {
+  const loc = locate(uid); if (!loc) return;
+  snap();
+  sibsOf(loc).splice(loc.index, 1);
+  pushLog(loc.vol, { op: "remove", path: loc.path });
+}
+function actMove(uid, toParentUid, index) {
+  const loc = locate(uid); if (!loc) return;
+  const tp = toParentUid ? locate(toParentUid) : null;
+  if (toParentUid && (toParentUid === uid || isAncestor(uid, toParentUid))) return toast("不能移动到自身或其子孙节点内", 1);
+  if (tp && tp.path.length + 1 > MAX_LEVEL) return toast("层级封顶 5 级，不能移入该位置", 1);
+  snap();
+  sibsOf(loc).splice(loc.index, 1);
+  const newSibs = tp ? tp.node.children : S.vol[loc.vol].nodes;
+  const idx = Math.max(0, Math.min(index ?? 0, newSibs.length));
+  newSibs.splice(idx, 0, loc.node);
+  pushLog(loc.vol, { op: "move", path: loc.path, to_parent: tp ? tp.path : [], index: idx });
+}
+function actUpDown(uid, dir) {
+  const loc = locate(uid); if (!loc) return;
+  const sibs = sibsOf(loc), i = loc.index, j = i + dir;
+  if (j < 0 || j >= sibs.length) return;
+  snap();
+  [sibs[i], sibs[j]] = [sibs[j], sibs[i]];
+  pushLog(loc.vol, { op: "move", path: loc.path, to_parent: loc.parentPath, index: j });
+}
+function actPromote(uid) {
+  const loc = locate(uid); if (!loc) return;
+  if (!loc.parent) return toast("根级章节不能再升级", 1);
+  snap();
+  sibsOf(loc).splice(loc.index, 1);
+  const gp = locate(loc.parent.uid);
+  const gpSibs = gp.parent ? gp.parent.children : S.vol[gp.vol].nodes;
+  gpSibs.splice(gp.index + 1, 0, loc.node);
+  const nl = locate(loc.node.uid);
+  pushLog(loc.vol, { op: "move", path: loc.path, to_parent: nl.path.slice(0, -1), index: nl.index });
+}
+function actDemote(uid) {
+  const loc = locate(uid); if (!loc) return;
+  if (loc.index === 0) return toast("同层第一个节点没有前一个同级可并入", 1);
+  if (loc.path.length + 1 > MAX_LEVEL) return toast("层级封顶 5 级，不能再降级", 1);
+  const prev = sibsOf(loc)[loc.index - 1];
+  snap();
+  sibsOf(loc).splice(loc.index, 1);
+  prev.children.push(loc.node);
+  const nl = locate(loc.node.uid);
+  pushLog(loc.vol, { op: "move", path: loc.path, to_parent: nl.path.slice(0, -1), index: nl.index });
+}
+
+/* ================= 树渲染 ================= */
+function structCount() {
+  let n = 0;
+  for (const v of Object.keys(S.log)) for (const op of S.log[v]) if (op.op !== "rename") n++;
+  return n;
+}
+function renderStructBar() {
+  const slot = $("#structbar-slot"); slot.innerHTML = "";
+  if (!S.treeEdit || S.structConfirmed || structCount() === 0) return;
+  const bar = document.createElement("div");
+  bar.className = "structbar"; bar.id = "struct-confirm";
+  bar.innerHTML = `检测到结构性修改（新增/删除/移动节点 ${structCount()} 处）——保存后，后续 AI 将以新目录为准继续工作（生成正文等）。纯改名不会触发本提示。`;
+  const b1 = document.createElement("button"); b1.className = "btn sm"; b1.style.marginRight = "8px"; b1.textContent = "返回修改";
+  b1.onclick = () => { bar.remove(); };
+  const b2 = document.createElement("button"); b2.className = "btn sm warn"; b2.textContent = "继续保存";
+  b2.onclick = () => { S.structConfirmed = true; renderStructBar(); saveAll(); };
+  bar.appendChild(document.createElement("br")); bar.appendChild(b1); bar.appendChild(b2);
+  slot.appendChild(bar);
+}
+function nodeBadges(n) {
+  const ids = [...new Set([...(n.src || []), ...((n.desc && n.desc.理由来源 ? n.desc.理由来源 : "").split(/[,，、]/).filter(Boolean))])];
+  return ids.filter(id => /^(MAND|TPL|REQ|SCORE)-\d+$/i.test(id));
+}
+function renderVolumes() {
+  const host = $("#volumes"); host.innerHTML = "";
+  const q = S.treeSearch.trim().toLowerCase();
+  let matchTotal = 0;
+  for (const v of DATA.volumes) {
+    const volEl = document.createElement("div"); volEl.className = "vol";
+    volEl.dataset.vol = v.name;
+    const numMap = numberingMap(v.name);
+    const head = document.createElement("div"); head.className = "vol-head";
+    head.innerHTML = `<span class="vn">${esc(v.name)}</span><span class="vc num">${S.vol[v.name].nodes.length} 个顶层章节</span>`;
+    const ib = document.createElement("button"); ib.className = "info-btn"; ib.textContent = "i"; ib.title = "来源标注图例";
+    ib.onclick = () => legendEl.hidden = !legendEl.hidden;
+    head.appendChild(ib); volEl.appendChild(head);
+    const legendEl = document.createElement("div"); legendEl.className = "legend"; legendEl.hidden = true;
+    legendEl.innerHTML = `来源标注（点徽章看原文与出处）：<span class="badge MAND">MAND 资格/强制条款</span><span class="badge TPL">TPL 格式件（招标方给定）</span><span class="badge REQ">REQ 商务技术要求</span><span class="badge SCORE">SCORE 评分项</span>`;
+    volEl.appendChild(legendEl);
+    if (v.scope) { const sc = document.createElement("div"); sc.className = "scope"; sc.textContent = "编制说明：" + v.scope; volEl.appendChild(sc); }
+    const rows = document.createElement("div"); rows.className = "rows";
+    matchTotal += renderRows(rows, S.vol[v.name].nodes, v.name, numMap, q, 0);
+    volEl.appendChild(rows); host.appendChild(volEl);
+  }
+  $("#tree-match").hidden = !q;
+  if (q) $("#tree-match").textContent = matchTotal + " 个匹配";
+}
+function rowMatches(n, q) {
+  if (!q) return true;
+  const self = n.text.toLowerCase().includes(q) || ((n.desc && n.desc.概述) || "").toLowerCase().includes(q);
+  return self || n.children.some(c => rowMatches(c, q));
+}
+function renderRows(host, list, volName, numMap, q, depth, parentUid) {
+  let count = 0;
+  for (let i = 0; i < list.length; i++) {
+    const n = list[i];
+    if (q && !rowMatches(n, q)) continue;
+    count++;
+    host.appendChild(renderRow(n, volName, numMap, depth, i, parentUid));
+    if (n.children.length && (S.expanded.has(n.uid) || q)) {
+      const kids = document.createElement("div"); kids.className = "kids";
+      count += renderRows(kids, n.children, volName, numMap, q, depth + 1, n.uid);
+      host.appendChild(kids);
+    }
+  }
+  return count;
+}
+function renderRow(n, volName, numMap, depth, idx, parentUid) {
+  const row = document.createElement("div"); row.className = "row"; row.dataset.uid = n.uid;
+  const line = document.createElement("div"); line.className = "line"; line.style.marginLeft = (depth * 0) + "px";
+  const tw = document.createElement("span"); tw.className = "tw" + (n.children.length ? "" : " nofill");
+  tw.textContent = n.children.length ? (S.expanded.has(n.uid) ? "▼" : "▶") : "";
+  tw.onclick = () => { S.expanded.has(n.uid) ? S.expanded.delete(n.uid) : S.expanded.add(n.uid); renderVolumes(); refreshNumbering(); };
+  line.appendChild(tw);
+  if (S.treeEdit) {
+    const grip = document.createElement("span"); grip.className = "grip"; grip.title = "拖拽移动：节点上/下边缘=插到同级前后，中间=并入其子节点"; grip.textContent = "⋮⋮"; grip.draggable = true;
+    grip.ondragstart = e => { e.dataTransfer.setData("text/uid", n.uid); row.classList.add("dragging"); };
+    grip.ondragend = () => row.classList.remove("dragging");
+    line.appendChild(grip);
+  }
+  const pre = document.createElement("span"); pre.className = "npre"; pre.dataset.uid = n.uid; pre.textContent = numMap[n.uid] || "";
+  if (!numMap[n.uid]) pre.style.visibility = "hidden";
+  line.appendChild(pre);
+  const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = n.text;
+  nm.title = [n.desc && n.desc.概述, n.desc && n.desc.归位理由].filter(Boolean).join("｜");
+  nm.ondblclick = () => { if (!S.treeEdit) return; inlineRename(nm, n.text, t => actRename(n.uid, t)); };
+  line.appendChild(nm);
+  for (const id of nodeBadges(n)) {
+    const b = document.createElement("span");
+    const t = id.split("-")[0].toUpperCase();
+    b.className = "badge " + t; b.textContent = id;
+    b.title = id + " " + ({ MAND: "资格/强制条款", TPL: "格式件（招标方给定）", REQ: "商务技术要求", SCORE: "评分项" }[t] || "") + " · 点击看原文与出处";
+    b.onclick = () => openTrace(id);
+    line.appendChild(b);
+  }
+  if (n.desc && n.desc["交付形态"]) { const c = document.createElement("span"); c.className = "chip"; c.textContent = n.desc["交付形态"]; line.appendChild(c); }
+  if (S.treeEdit) {
+    const ovl = document.createElement("span"); ovl.className = "ovl"; ovl.textContent = (n.desc && n.desc.概述) || ""; line.appendChild(ovl);
+    const btns = document.createElement("span"); btns.className = "rowbtns";
+    const mk = (txt, title, fn, cls) => { const b = document.createElement("button"); b.textContent = txt; b.title = title; if (cls) b.className = cls; b.onclick = e => { e.stopPropagation(); fn(); }; return b; };
+    btns.appendChild(mk("↑", "上移", () => actUpDown(n.uid, -1)));
+    btns.appendChild(mk("↓", "下移", () => actUpDown(n.uid, 1)));
+    btns.appendChild(mk("✎", "改名（也可双击名称）", () => inlineRename(nm, n.text, t => actRename(n.uid, t))));
+    btns.appendChild(mk("＋", "新增同级", () => actAdd(parentUid, idx + 1, volName)));
+    const add = mk("↳", depth + 1 > MAX_LEVEL ? "层级封顶 5 级" : "新增子级", () => actAdd(n.uid, 0));
+    if (depth + 1 > MAX_LEVEL) add.disabled = true;
+    btns.appendChild(add);
+    const del = mk("🗑", "删除（含子节点）", () => {
+      if (del.classList.contains("arm")) actRemove(n.uid);
+      else { del.classList.add("arm"); del.title = "再点一次确认删除（含子节点）"; setTimeout(() => { del.classList.remove("arm"); del.title = "删除（含子节点）"; }, 2500); }
+    });
+    btns.appendChild(del);
+    ["封面", "目录"].includes(n.text) && (del.title = "删除（含子节点）——合册按名识别「" + n.text + "」", btns.title = "「封面」「目录」由合册按名识别，改名/删除会影响封面页与目录页生成");
+    line.appendChild(btns);
+  }
+  row.appendChild(line);
+  row.ondragover = e => {
+    if (!S.treeEdit) return;
+    e.preventDefault();
+    const srcUid = e.dataTransfer.getData("text/uid"); if (!srcUid || srcUid === n.uid || isAncestor(srcUid, n.uid)) return;
+    const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height;
+    row.classList.remove("drop-above", "drop-below", "drop-inside");
+    row.classList.add(y < .25 ? "drop-above" : y > .75 ? "drop-below" : "drop-inside");
+  };
+  row.ondragleave = () => row.classList.remove("drop-above", "drop-below", "drop-inside");
+  row.ondrop = e => {
+    e.preventDefault();
+    const cls = ["drop-above", "drop-below", "drop-inside"].find(c => row.classList.contains(c));
+    row.classList.remove(...cls ? [cls] : []);
+    const srcUid = e.dataTransfer.getData("text/uid"); if (!srcUid) return;
+    const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height;
+    if (y < .25) actMove(srcUid, parentUid, idx);
+    else if (y > .75) actMove(srcUid, parentUid, idx + 1);
+    else { if (depth + 1 > MAX_LEVEL) return toast("层级封顶 5 级", 1); actMove(srcUid, n.uid, n.children.length); }
+  };
+  row.oncontextmenu = e => { if (S.treeEdit) { e.preventDefault(); openCtx(e.clientX, e.clientY, n, volName); } };
+  return row;
+}
+function inlineRename(nm, old, cb) {
+  const input = document.createElement("input"); input.value = old;
+  nm.textContent = ""; nm.appendChild(input); input.focus(); input.select();
+  let done = false;
+  const fin = ok => { if (done) return; done = true; const v = input.value; if (ok && v !== old) cb(v); else nm.textContent = old; };
+  input.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter") fin(true); if (e.key === "Escape") fin(false); };
+  input.onblur = () => fin(true);
+  input.onclick = e => e.stopPropagation();
+}
+let ctxEl = null;
+function openCtx(x, y, n, volName) {
+  closeCtx();
+  const loc = locate(n.uid);
+  ctxEl = document.createElement("div"); ctxEl.className = "ctxmenu";
+  const items = [
+    ["升级（上移一层）", () => actPromote(n.uid), !loc.parent, ""],
+    ["降级（并入上一节点）", () => actDemote(n.uid), loc.index === 0 || loc.path.length >= MAX_LEVEL, loc.index === 0 ? "同层第一个节点没有前一个同级可并入" : "层级封顶 5 级，不能再降级"],
+    ["上移", () => actUpDown(n.uid, -1), loc.index === 0, ""],
+    ["下移", () => actUpDown(n.uid, 1), false, ""],
+    ["新增同级", () => actAdd(loc.parent ? loc.parent.uid : null, loc.index + 1, volName), false, ""],
+    ["新增子级", () => actAdd(n.uid, 0), loc.path.length >= MAX_LEVEL, "层级封顶 5 级"],
+    ["删除（含子节点）", () => actRemove(n.uid), false, ""],
+  ];
+  for (const [txt, fn, dis, why] of items) {
+    const b = document.createElement("button"); b.textContent = txt;
+    if (txt.startsWith("删除")) b.className = "danger";
+    if (dis) { b.disabled = true; if (why) b.title = why; }
+    b.onclick = () => { closeCtx(); fn(); };
+    ctxEl.appendChild(b);
+  }
+  document.body.appendChild(ctxEl);
+  const r = ctxEl.getBoundingClientRect();
+  ctxEl.style.left = Math.min(x, innerWidth - r.width - 8) + "px";
+  ctxEl.style.top = Math.min(y, innerHeight - r.height - 8) + "px";
+}
+function closeCtx() { if (ctxEl) { ctxEl.remove(); ctxEl = null; } }
+document.addEventListener("click", closeCtx);
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeCtx(); });
+$("#tree-edit-btn").onclick = () => { S.treeEdit = true; renderTreeMode(); };
+$("#tree-done-btn").onclick = () => {
+  if (structCount() > 0 && !S.structConfirmed) {
+    const bar = $("#struct-confirm");
+    if (!bar) { renderStructBar(); }
+    const b = $("#struct-confirm");
+    if (b) { b.scrollIntoView({ behavior: "smooth", block: "center" }); b.classList.add("pulse"); toast("有结构性修改待确认：请先在确认条选择『继续保存』或『返回修改』", 1); return; }
+  }
+  saveAll(() => { S.treeEdit = false; renderTreeMode(); });
+};
+function renderTreeMode() {
+  $("#tree-edit-btn").hidden = S.treeEdit; $("#tree-done-btn").hidden = !S.treeEdit;
+  $("#tree-hint").hidden = !S.treeEdit;
+  renderVolumes(); refreshNumbering(); renderStructBar();
+}
+$("#tree-search").oninput = e => { S.treeSearch = e.target.value; renderVolumes(); refreshNumbering(); };
+
+/* ================= 溯源弹窗 ================= */
+function openTrace(id) {
+  const r = (DATA.registry || {})[id];
+  const mask = document.createElement("div"); mask.className = "mask";
+  const m = document.createElement("div"); m.className = "modal";
+  m.innerHTML = `<button class="close" title="关闭">✕</button><h4>来源追溯 · ${esc(id)}</h4>`;
+  if (!r) { const p = document.createElement("p"); p.className = "muted small"; p.textContent = `登记表中没有 ${id} 的条目（引用悬空）——可能是目录引用了不存在的来源编号。`; m.appendChild(p); }
+  else {
+    const meta = document.createElement("div"); meta.className = "small muted";
+    meta.innerHTML = `<span class="badge ${esc(id.split("-")[0])}">${esc(id)}</span> ${esc(r.source || "出处未登记")}`;
+    m.appendChild(meta);
+    const q = document.createElement("div"); q.className = "srctext"; q.textContent = r.text || "（登记表未存原文，出处见上方）"; m.appendChild(q);
+    const ctxHost = document.createElement("div"); m.appendChild(ctxHost);
+    if (ONLINE && r.file && r.line) {
+      ctxHost.textContent = "正在加载原文上下文…";
+      fetch(API + "context?file=" + encodeURIComponent(r.file) + "&line=" + r.line)
+        .then(x => x.json()).then(j => {
+          if (!j.ok) { ctxHost.textContent = j.error || "原文上下文不可用。"; return; }
+          ctxHost.innerHTML = "";
+          const blk = document.createElement("div"); blk.className = "ctxblk";
+          blk.innerHTML = `<div class="cl" style="background:var(--line-soft);color:var(--ink-2)">原文上下文 L${j.from}-L${j.to} · ${esc(j.file)}</div>`;
+          for (const l of j.lines) {
+            const d = document.createElement("div"); d.className = "cl" + (l.no === r.line ? " hit" : "");
+            d.innerHTML = `<span class="no num">${l.no}</span><span>${esc(l.text) || " "}</span>`;
+            blk.appendChild(d);
+          }
+          ctxHost.appendChild(blk);
+        }).catch(() => ctxHost.textContent = "原文上下文加载失败（服务断开）。");
+    } else if (r.file && r.line) {
+      const p = document.createElement("p"); p.className = "muted small"; p.style.marginTop = "8px";
+      p.textContent = `出处 ${r.file} L${r.line}——连接评审台服务后可看原文上下文切片。`;
+      m.appendChild(p);
+    }
+  }
+  mask.appendChild(m); $("#modal-slot").appendChild(mask);
+  mask.onclick = e => { if (e.target === mask || e.target.className === "close") mask.remove(); };
+  document.addEventListener("keydown", function esc2(e) { if (e.key === "Escape") { mask.remove(); document.removeEventListener("keydown", esc2); } });
+  m.querySelector(".close").onclick = () => mask.remove();
+}
+
+/* ================= 写作指引 ================= */
+const MODES = ["素材修订", "格式跟随", "推理撰写"];
+function rowByKey(key) { return DATA.guide.rows.find(r => r.key === key) || null; }
+function guideFlags(key) {
+  const row = rowByKey(key); const out = [];
+  const inTree = guideTreeKeys().has(key);
+  if (!row && inTree) out.push("unassigned");
+  if (row && !inTree) out.push("offtree");
+  if (row && /【缺/.test(row.note || "")) out.push("missing");
+  if (row && DATA.written_keys.includes(key)) out.push("written");
+  return out;
+}
+function guideTreeKeys() {
+  const s = new Set();
+  for (const v of DATA.volumes) {
+    const pre = DATA.volumes.length > 1 ? v.name + "/" : "";
+    (function w(ns) { for (const n of ns) { s.add(pre + n.text); w(n.children); } })(S.vol[v.name].nodes);
+  }
+  return s;
+}
+function renderGuidePills() {
+  const host = $("#guide-pills"); host.innerHTML = "";
+  const counts = { all: 0, missing: 0, unassigned: 0, offtree: 0, pending: 0, written: 0 };
+  const leaves = guideLeafKeys();
+  for (const k of leaves) {
+    const f = guideFlags(k); counts.all++;
+    if (f.includes("missing")) counts.missing++;
+    if (f.includes("unassigned")) counts.unassigned++;
+    if (f.includes("offtree")) counts.offtree++;
+    if (f.includes("written")) counts.written++; else counts.pending++;
+  }
+  const defs = [["all", "全部", false], ["missing", "缺素材", true], ["unassigned", "未分配", true], ["offtree", "不在目录", true], ["pending", "待写", false], ["written", "已写", false]];
+  for (const [id, label, warn] of defs) {
+    const b = document.createElement("button");
+    b.textContent = label + " " + counts[id];
+    if (S.guideFilter === id) b.classList.add("active");
+    if (warn) b.classList.add("warnpill"); if (id === "written") b.classList.add("okpill");
+    if (counts[id] === 0 && id !== "all") { b.disabled = true; b.title = `${label}：没有行`; }
+    b.onclick = () => { S.guideFilter = id; renderGuideTree(); renderGuidePills(); };
+    host.appendChild(b);
+  }
+}
+function guideLeafKeys() {
+  const list = [];
+  for (const v of DATA.volumes) {
+    const pre = DATA.volumes.length > 1 ? v.name + "/" : "";
+    (function w(ns) { for (const n of ns) { if (!n.children.length) list.push(pre + n.text); w(n.children); } })(S.vol[v.name].nodes);
+  }
+  return list;
+}
+function renderGuideTree() {
+  const host = $("#guide-tree"); host.innerHTML = "";
+  const q = S.guideSearch.trim().toLowerCase();
+  const sel = S.guideSel;
+  let anyShown = false;
+  for (const v of DATA.volumes) {
+    const pre = DATA.volumes.length > 1 ? v.name + "/" : "";
+    if (DATA.volumes.length > 1) {
+      const vh = document.createElement("div"); vh.className = "small muted"; vh.style.cssText = "margin:6px 0 2px;font-weight:600";
+      vh.textContent = v.name; host.appendChild(vh);
+    }
+    anyShown = renderGNodes(host, S.vol[v.name].nodes, pre, q, sel, 0, v.name) || anyShown;
+  }
+  if (!anyShown) { const p = document.createElement("p"); p.className = "muted small"; p.textContent = q ? "没有命中的章节——换个筛选或清空搜索。" : "目录还没有节点。"; host.appendChild(p); }
+  const offHost = $("#guide-offtree"); offHost.innerHTML = "";
+  const treeKeys = guideTreeKeys();
+  const off = DATA.guide.rows.map(r => r.key).filter(k => !treeKeys.has(k));
+  if (off.length) {
+    const t = document.createElement("div"); t.className = "small"; t.style.cssText = "color:var(--warn);font-weight:600;margin-top:10px;display:flex;gap:6px;align-items:center";
+    t.textContent = `⚠ 不在目录 ${off.length} 节`; offHost.appendChild(t);
+    for (const k of off) {
+      const d = document.createElement("div"); d.className = "gnode"; d.title = `『${k}』不在目录叶子中——节名须与目录逐字一致`;
+      d.innerHTML = `<span class="dot warn"></span><span>${esc(k)}</span>`;
+      d.onclick = () => { S.guideSel = k; renderGuideTree(); renderGuideDetail(); };
+      offHost.appendChild(d);
+    }
+  }
+}
+function renderGNodes(host, ns, pre, q, sel, depth, volName) {
+  let any = false;
+  for (const n of ns) {
+    const key = pre + n.text;
+    const flags = guideFlags(key);
+    const okFilter = S.guideFilter === "all" || flags.includes(S.guideFilter) || (S.guideFilter === "pending" && !flags.includes("written") && !flags.includes("unassigned"));
+    const hitQ = !q || key.toLowerCase().includes(q);
+    const childHit = renderGNodesNeedsChild(n, pre, q);
+    if (!hitQ && !childHit) continue;
+    if (S.guideFilter !== "all" && !okFilter && !childHit) continue;
+    any = true;
+    const d = document.createElement("div"); d.className = "gnode" + (sel === key ? " sel" : "");
+    d.style.marginLeft = (depth * 12 + 6) + "px";
+    const dotCls = flags.includes("unassigned") ? "unassigned" : flags.includes("written") ? "ok" : flags.includes("missing") || flags.includes("offtree") ? "warn" : "pending";
+    d.innerHTML = `<span class="dot ${dotCls}" title="${{ unassigned: "未分配", ok: "已写", warn: "有问题", pending: "待写" }[dotCls]}"></span><span>${esc(n.text)}</span>` + (!n.children.length && flags.includes("unassigned") ? `<span class="small muted" style="margin-left:auto">未分配</span>` : "");
+    d.onclick = () => { S.guideSel = key; renderGuideTree(); renderGuideDetail(); };
+    host.appendChild(d);
+    if (n.children.length && (hitQ || childHit)) renderGNodes(host, n.children, pre, q, sel, depth + 1, volName);
+  }
+  return any;
+}
+function renderGNodesNeedsChild(n, pre, q) {
+  if (!q && S.guideFilter === "all") return false;
+  return n.children.some(c => (pre + c.text).toLowerCase().includes(q) || renderGNodesNeedsChild(c, pre, q));
+}
+function renderGuideDetail() {
+  const host = $("#guide-detail"); host.innerHTML = "";
+  const key = S.guideSel;
+  if (!key) { host.innerHTML = `<p class="muted small" style="margin-top:20px">从左侧选一个章节查看与编辑写作指引。</p>`; return; }
+  const row = rowByKey(key);
+  const flags = guideFlags(key);
+  const nodeInfo = guideNodeInfo(key);
+  const head = document.createElement("div");
+  head.innerHTML = `<h3>${esc(key)}</h3>`;
+  const stline = document.createElement("div"); stline.className = "small muted"; stline.style.marginBottom = "10px";
+  stline.innerHTML = flags.includes("written") ? `<span class="chip ok">已写</span>` : flags.includes("unassigned") ? `<span class="chip warn">未分配</span>` : `<span class="chip">待写</span>` + (flags.includes("missing") ? ` <span class="chip warn">缺素材</span>` : "") + (flags.includes("offtree") ? ` <span class="chip warn">不在目录</span>` : "");
+  head.appendChild(stline);
+  host.appendChild(head);
+  if (flags.includes("unassigned")) {
+    const em = document.createElement("div");
+    em.style.cssText = "border:1.5px dashed var(--line);border-radius:var(--r-md);padding:16px;color:var(--ink-2);font-size:13px";
+    em.innerHTML = `本节还没有指引行——目录里有这个章节，但写作指引没有给它分配行，AI 不会写它。${S.guideEdit ? "" : "点左上角『编辑指引』后可补行。"}<br><br>`;
+    if (S.guideEdit) { const b = document.createElement("button"); b.className = "btn primary sm"; b.textContent = `+ 为『${key}』添加指引行`; b.onclick = () => { S.guideDirty[key] = S.guideDirty[key] || {}; setGuideField(key, "mode", "推理撰写"); renderGuideDetail(); renderGuidePills(); }; em.appendChild(b); }
+    host.appendChild(em); return;
+  }
+  const B = (title) => { const d = document.createElement("div"); d.className = "block"; d.innerHTML = `<div class="bt">${title}</div>`; host.appendChild(d); return d; };
+  /* 本节写什么 */
+  const what = B("本节写什么");
+  what.innerHTML += `<div class="kvrow"><span class="k">概述</span>${esc(nodeInfo && nodeInfo.概述 || "—")}</div>
+    <div class="kvrow"><span class="k">为什么有这章</span>${esc(nodeInfo && nodeInfo.归位理由 || "—")}</div>
+    <div class="kvrow"><span class="k">交付形态</span>${esc(nodeInfo && nodeInfo["交付形态"] || "正文编写")}</div>`;
+  /* 怎么写 */
+  const how = B("怎么写");
+  if (S.guideEdit) {
+    const chips = document.createElement("div"); chips.className = "modechips";
+    const cur = getGuideField(key, "mode") ?? (row && row.mode) ?? "推理撰写";
+    for (const m of MODES) {
+      const b = document.createElement("button"); const parts = cur.split("+").filter(Boolean);
+      b.textContent = m; b.classList.toggle("on", parts.includes(m));
+      b.onclick = () => {
+        let parts2 = getGuideField(key, "mode") ?? (row && row.mode) ?? "推理撰写";
+        let arr = parts2.split("+").filter(p => MODES.includes(p));
+        arr.includes(m) ? arr = arr.filter(x => x !== m) : arr.push(m);
+        setGuideField(key, "mode", MODES.filter(x => arr.includes(x)).join("+") || "—");
+        renderGuideDetail();
+      };
+      chips.appendChild(b);
+    }
+    const ex = document.createElement("button"); ex.className = "excl"; ex.title = "这一节不写正文：按招标原件填空或贴附件（投标函、授权书、身份证复印件这类），不走 AI 撰写";
+    ex.textContent = "不写正文"; ex.classList.toggle("on", (getGuideField(key, "mode") ?? (row && row.mode)) === "—");
+    ex.onclick = () => { setGuideField(key, "mode", (getGuideField(key, "mode") ?? (row && row.mode)) === "—" ? "推理撰写" : "—"); renderGuideDetail(); };
+    chips.appendChild(ex); how.appendChild(chips);
+  } else {
+    const m = (row && row.mode) || "—";
+    const d = document.createElement("div"); d.className = "kvrow";
+    d.innerHTML = m.split("+").filter(Boolean).map(x => `<span class="chip brand">${esc(x)}</span>`).join(" ") || `<span class="chip">不写正文</span>`;
+    how.appendChild(d);
+  }
+  /* 依据 */
+  const basis = B("依据");
+  const curBasis = getGuideField(key, "basis") ?? (row && row.basis) ?? "";
+  const ids = curBasis.split(/[,，、\s]+/).filter(x => /^(MAND|TPL|REQ|SCORE)-\d+$/i.test(x));
+  if (S.guideEdit) {
+    const inp = document.createElement("input"); inp.type = "text"; inp.value = curBasis;
+    inp.placeholder = "未指定依据——可手输编号（如 REQ-01），或从下方登记表点选";
+    inp.setAttribute("list", "registry-list");
+    inp.oninput = () => setGuideField(key, "basis", inp.value);
+    basis.appendChild(inp);
+    const dl = document.createElement("datalist"); dl.id = "registry-list";
+    for (const [id, r] of Object.entries(DATA.registry || {})) { const o = document.createElement("option"); o.value = id; o.label = (r.text || "").slice(0, 40); dl.appendChild(o); }
+    basis.appendChild(dl);
+  } else if (!ids.length) {
+    const p = document.createElement("p"); p.className = "muted small";
+    p.textContent = "本节没有关联登记编号——按模式与招标格式件写作（模板填充/附件类，或补依据后重新生成指引）。";
+    basis.appendChild(p);
+  }
+  if (ids.length) {
+    const sum = document.createElement("div"); sum.style.marginTop = "8px";
+    const sc = ids.filter(i => i.startsWith("SCORE")), md = ids.filter(i => i.startsWith("MAND"));
+    sum.innerHTML = `<span class="stance">依据概览</span><span class="small muted">${sc.length ? `${sc.length} 条评分（${sc.map(i => (DATA.registry[i] || {}).score || "分值未详").join("、")}） · ` : ""}${md.length ? `${md.length} 条强制要求 · ` : ""}${ids.length - sc.length - md.length} 条其他</span>`;
+    basis.appendChild(sum);
+    for (const id of ids) {
+      const r = (DATA.registry || {})[id];
+      const d = document.createElement("div"); d.className = "basisrow";
+      const scoreTxt = id.startsWith("SCORE") && r && r.score ? `<span class="chip warn">${esc(r.score)}</span>` : "";
+      d.innerHTML = `<span class="badge ${esc(id.split("-")[0])} bid" style="cursor:pointer">${esc(id)}</span>${scoreTxt}<div class="quote">${esc(r && r.text || "登记表中没有此编号（引用悬空）")}</div><div class="src">${esc(r && r.source || "")}</div>`;
+      d.querySelector(".badge").onclick = () => openTrace(id);
+      basis.appendChild(d);
+    }
+  }
+  /* 素材 */
+  const mat = B("写法参考 · 素材块");
+  const curMat = getGuideField(key, "material") ?? (row && row.material) ?? "—";
+  if (S.guideEdit) {
+    const inp = document.createElement("input"); inp.type = "text"; inp.value = curMat;
+    inp.placeholder = "文件.docx L120-L260（多个用中文逗号分隔）；没有素材写 —，缺料写【缺：xxx】";
+    const err = document.createElement("div"); err.className = "ferr"; err.hidden = true;
+    inp.oninput = () => {
+      const v = inp.value.trim();
+      let bad = false;
+      if (v && v !== "—" && v !== "【缺】") for (const tok of v.split("，")) if (!/^.+\.docx\s+L\d+(-L?\d+)?$/.test(tok.trim())) bad = true;
+      inp.classList.toggle("bad", bad); err.hidden = !bad;
+      err.textContent = bad ? "素材记法：文件.docx L120-L260（行号区间来自解析结果）" : "";
+      if (!bad) setGuideField(key, "material", v);
+    };
+    mat.appendChild(inp); mat.appendChild(err);
+  } else {
+    if (curMat && curMat !== "—") {
+      for (const tok of curMat.split("，")) {
+        const d = document.createElement("div"); d.className = "basisrow";
+        d.innerHTML = `<span class="chip brand">${esc(tok.trim())}</span>`;
+        mat.appendChild(d);
+      }
+    } else mat.innerHTML += `<span class="small muted">—</span>`;
+  }
+  /* 图示 */
+  const fig = B("图示");
+  const curFig = getGuideField(key, "figure") ?? (row && row.figure) ?? "—";
+  if (S.guideEdit) {
+    const inp = document.createElement("input"); inp.type = "text"; inp.value = curFig;
+    inp.placeholder = "类型:主题（类型限 表/分层/甘特，顿号分隔）；无则 —";
+    const err2 = document.createElement("div"); err2.className = "ferr"; err2.hidden = true;
+    inp.oninput = () => {
+      const v = inp.value.trim(); let bad = false;
+      if (v && v !== "—") for (const tok of v.split("、")) if (!["表", "分层", "甘特"].includes(tok.split(":")[0])) bad = true;
+      inp.classList.toggle("bad", bad); err2.hidden = !bad;
+      err2.textContent = bad ? "图示类型词限：甘特、分层、表" : "";
+      if (!bad) setGuideField(key, "figure", v);
+    };
+    fig.appendChild(inp); fig.appendChild(err2);
+  } else {
+    fig.innerHTML += curFig === "—" ? `<span class="small muted">—</span>` : curFig.split("、").map(t => { const [a, b] = t.split(":"); return `<span class="chip"><b style="color:var(--brand)">${esc(a)}</b>${b ? ":" + esc(b) : ""}</span>`; }).join(" ");
+  }
+  /* 缺口/备注 三组 */
+  const note = B("公司资料 / 缺口");
+  const curNote = getGuideField(key, "note") ?? (row && row.note) ?? "—";
+  if (S.guideEdit) {
+    const ta = document.createElement("textarea"); ta.value = curNote;
+    ta.oninput = () => setGuideField(key, "note", ta.value);
+    note.appendChild(ta);
+  } else {
+    const groups = splitNote(curNote);
+    const gwrap2 = document.createElement("div"); gwrap2.className = "notegroups";
+    const mkG = (cls, title, items) => {
+      if (!items.length) return;
+      const g = document.createElement("div"); g.className = "ng " + cls;
+      g.innerHTML = `<div class="nt">${title}</div>` + items.map(x => `<div class="small">${esc(x)}</div>`).join("");
+      gwrap2.appendChild(g);
+    };
+    mkG("warn", "需要你提供", groups.missing);
+    mkG("warn", "需要你确认", groups.confirm);
+    mkG("info", "已从你的资料中找到", groups.found);
+    mkG("", "AI 执行说明", groups.other);
+    note.appendChild(gwrap2);
+  }
+  if (S.guideEdit) {
+    const del = document.createElement("button"); del.className = "btn danger sm"; del.style.marginTop = "12px";
+    del.textContent = "删除此指引行"; del.title = "删行后该节回到『未分配』状态（AI 不会写它）";
+    del.onclick = () => { S.guideRemoved[key] = true; delete S.guideDirty[key]; renderGuideDetail(); renderGuideTree(); renderGuidePills(); refreshSaveStates(); draftSoon(); };
+    host.appendChild(del);
+  }
+  const hint = document.createElement("p"); hint.className = "small muted"; hint.style.marginTop = "12px";
+  hint.textContent = S.guideEdit ? "改动在点『完成编辑』保存后写入写作指引文件。" : "节名与目录逐字一致；模式与素材记法有校验，保存时非法值会被拒绝。";
+  host.appendChild(hint);
+}
+function splitNote(note) {
+  const out = { missing: [], confirm: [], found: [], other: [] };
+  for (const seg of (note || "").split(/[；;]\s*/)) {
+    const s = seg.trim(); if (!s || s === "—") continue;
+    if (/^【缺[:：]/.test(s)) out.missing.push(s);
+    else if (/⚠|待澄清|CLAR-/.test(s)) out.confirm.push(s);
+    else if (/^【资料】|^【知识库】/.test(s)) out.found.push(s);
+    else out.other.push(s);
+  }
+  return out;
+}
+function guideNodeInfo(key) {
+  for (const v of DATA.volumes) {
+    const pre = DATA.volumes.length > 1 ? v.name + "/" : "";
+    let found = null;
+    (function w(ns) { for (const n of ns) { if (pre + n.text === key) found = n.desc; w(n.children); } })(S.vol[v.name].nodes);
+    if (found) return found;
+  }
+  return null;
+}
+function setGuideField(key, field, val) {
+  S.guideDirty[key] = S.guideDirty[key] || {};
+  S.guideDirty[key][field] = val;
+  refreshSaveStates(); draftSoon();
+}
+function getGuideField(key, field) {
+  const d = S.guideDirty[key];
+  return d ? d[field] : undefined;
+}
+$("#guide-edit-btn").onclick = () => { S.guideEdit = true; renderGuideMode(); };
+$("#guide-done-btn").onclick = () => saveAll(() => { S.guideEdit = false; renderGuideMode(); });
+function renderGuideMode() {
+  $("#guide-edit-btn").hidden = S.guideEdit; $("#guide-done-btn").hidden = !S.guideEdit;
+  $("#guide-export-btn").hidden = S.guideEdit || S.online;
+  renderGuideDetail(); renderGuideTree(); renderGuidePills();
+}
+$("#guide-search").oninput = e => { S.guideSearch = e.target.value; renderGuideTree(); };
+
+/* ================= 承诺清单 ================= */
+function promiseFilled(p) {
+  const v = (S.promiseDirty[p.item] && S.promiseDirty[p.item].value) ?? p.value ?? "";
+  return v && !/待补|待定|待确认/.test(v);
+}
+function renderPromises() {
+  const host = $("#promises"); host.innerHTML = "";
+  for (const p of DATA.promise.rows) {
+    const val = (S.promiseDirty[p.item] && S.promiseDirty[p.item].value) ?? p.value ?? "";
+    const note = (S.promiseDirty[p.item] && S.promiseDirty[p.item].note) ?? p.note ?? "";
+    const card = document.createElement("div"); card.className = "promise " + (promiseFilled(p) ? "filled" : "pending");
+    const head = document.createElement("div"); head.className = "head";
+    head.innerHTML = `<span class="item">${esc(p.item)}</span><span class="st">${promiseFilled(p) ? "✓ 已拍板" : "待你拍板"}</span>`;
+    card.appendChild(head);
+    const body = document.createElement("div"); body.className = "body";
+    const c1 = document.createElement("div"); c1.className = "col";
+    c1.innerHTML = `<div class="ct">说明 / 依据</div><div class="small">${esc(note || "—")}</div>`;
+    body.appendChild(c1);
+    const c2 = document.createElement("div"); c2.className = "col";
+    c2.innerHTML = `<div class="ct">你的决定${promiseFilled(p) ? "" : "（承诺清单里的值会逐处写进正文，拍板前不写任何正文）"}</div>`;
+    if (S.promiseEdit) {
+      const inp = document.createElement("input"); inp.type = "text"; inp.value = val;
+      const err = document.createElement("div"); err.className = "ferr"; err.hidden = true;
+      inp.oninput = () => {
+        const bad = /[（(].{6,}[)）]/.test(inp.value) || inp.value.length > 40 || /待补|待定/.test(inp.value);
+        inp.classList.toggle("bad", bad); err.hidden = !bad;
+        err.textContent = bad ? "值列要写可独立检索的裸值（人名、数字、期限）；解释放说明列" : "";
+        if (!bad) { S.promiseDirty[p.item] = S.promiseDirty[p.item] || {}; S.promiseDirty[p.item].value = inp.value; refreshSaveStates(); draftSoon(); }
+      };
+      c2.appendChild(inp); c2.appendChild(err);
+      const ninp = document.createElement("input"); ninp.type = "text"; ninp.value = note; ninp.placeholder = "备注（可选）"; ninp.style.marginTop = "6px";
+      ninp.oninput = () => { S.promiseDirty[p.item] = S.promiseDirty[p.item] || {}; S.promiseDirty[p.item].note = ninp.value; refreshSaveStates(); draftSoon(); };
+      c2.appendChild(ninp);
+    } else {
+      const d = document.createElement("div"); d.style.cssText = "font-size:14px;font-weight:600;color:" + (promiseFilled(p) ? "var(--ink)" : "var(--warn)");
+      d.textContent = val || "待补"; c2.appendChild(d);
+    }
+    body.appendChild(c2); card.appendChild(body); host.appendChild(card);
+  }
+}
+$("#promise-edit-btn").onclick = () => { S.promiseEdit = true; renderPromiseMode(); };
+$("#promise-done-btn").onclick = () => saveAll(() => { S.promiseEdit = false; renderPromiseMode(); });
+function renderPromiseMode() {
+  $("#promise-edit-btn").hidden = S.promiseEdit; $("#promise-done-btn").hidden = !S.promiseEdit;
+  $("#promise-export-btn").hidden = S.promiseEdit || S.online;
+  renderPromises();
+}
+
+/* ================= 澄清问卷 / 门 / 总览 ================= */
+function renderClar() {
+  const host = $("#clar"); host.innerHTML = "";
+  if (!DATA.clar.items.length) { host.innerHTML = `<p class="muted small">没有待澄清事项。</p>`; return; }
+  for (const c of DATA.clar.items) {
+    const v = (S.clar && S.clar[c.id]) || DATA.clar.verdicts[c.id] || null;
+    const d = document.createElement("div"); d.className = "clar-item" + (v ? " verdicted" : "");
+    d.innerHTML = `<div class="q">${esc(c.id)} · ${esc(c.question)}</div>
+      <div class="meta">类型：${esc(c.type || "—")} · 影响范围：${esc(c.impact || "—")}${v ? ` · <span class="chip ok">已裁决：${esc(v.verdict)}${v.at ? " · " + esc(v.at) : ""}</span>` : ""}</div>
+      ${c.action ? `<div class="act">建议动作：${esc(c.action)}</div>` : ""}`;
+    if (!v) {
+      const opts = document.createElement("div"); opts.className = "opts";
+      const name = "clar-" + c.id;
+      const mkOpt = (label, val, rec) => {
+        const l = document.createElement("label");
+        l.innerHTML = `<input type="radio" name="${name}" value="${val}"> ${esc(label)}${rec ? ` <span class="chip brand" style="margin-left:4px">推荐</span>` : ""}`;
+        opts.appendChild(l);
+      };
+      mkOpt("按建议：" + (c.action || "（无建议动作）"), "按建议", !!c.action);
+      mkOpt("自定义处理", "自定义");
+      mkOpt("挂起（先不处理，继续其余流程）", "挂起");
+      d.appendChild(opts);
+      const note = document.createElement("input"); note.type = "text"; note.placeholder = "备注 / 自定义做法（可选）";
+      note.className = ""; note.style.cssText = "width:100%;margin-top:8px;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r-md)";
+      d.appendChild(note);
+      const btn = document.createElement("button"); btn.className = "btn primary sm"; btn.style.marginTop = "8px"; btn.textContent = "记录裁决";
+      btn.onclick = () => {
+        const sel = d.querySelector(`input[name="${name}"]:checked`);
+        if (!sel) return toast("先选择一个裁决", 1);
+        submitClar([{ id: c.id, verdict: sel.value, note: note.value.trim() }]);
+      };
+      d.appendChild(btn);
+    }
+    host.appendChild(d);
+  }
+}
+function renderGates() {
+  const host = $("#gates"); host.innerHTML = "";
+  const latest = {};
+  for (const g of (DATA.decisions.gates || [])) latest[g.gate] = g;
+  const GATES = [["G1", "解析确认"], ["G2", "要点与澄清"], ["G3", "目录确认"], ["G4", "指引与提问"], ["G5", "承诺拍板"], ["G6", "校验后合册"]];
+  for (const [g, label] of GATES) {
+    const st = latest[g];
+    const d = document.createElement("div"); d.className = "gate" + (st && st.verdict === "pass" ? " pass" : "");
+    d.innerHTML = `<b>${g}</b> ${label} <span class="st">${st ? (st.verdict === "pass" ? "✓ 已确认" + (st.at ? " · " + esc(st.at) : "") : esc(st.verdict)) : "未到"}</span>`;
+    if (!st || st.verdict !== "pass") {
+      const b = document.createElement("button"); b.className = "btn sm"; b.textContent = "标记通过";
+      b.title = "确认此门通过（记录进确认台账；G5 承诺拍板不受免检影响）";
+      b.onclick = () => submitClar([], { gate: g, verdict: "pass", note: "" });
+      d.appendChild(b);
+    }
+    host.appendChild(d);
+  }
+}
+function coveredScoreIds() {
+  const ids = new Set();
+  for (const v of Object.values(S.vol)) (function w(ns) { for (const n of ns) { for (const b of nodeBadges(n)) if (b.startsWith("SCORE")) ids.add(b); w(n.children); } })(v.nodes);
+  return ids;
+}
+function renderKpis() {
+  const host = $("#kpis"); host.innerHTML = "";
+  const sc = DATA.scores || [];
+  const cov = coveredScoreIds();
+  let covN = 0; for (const s of sc) if (cov.has(s.id)) covN++;
+  const pr = DATA.promise.rows || [];
+  let prN = 0; for (const p of pr) if (promiseFilled(p)) prN++;
+  const cl = DATA.clar.items || [];
+  let clN = 0; for (const c of cl) if (DATA.clar.verdicts[c.id]) clN++;
+  const mk = (v, l, n, alert) => {
+    const d = document.createElement("div"); d.className = "kpi" + (alert ? " alert" : "");
+    d.innerHTML = `<div class="v num">${v}</div><div class="l">${l}</div>` + (n ? `<div class="n">${n}</div>` : "");
+    host.appendChild(d);
+  };
+  mk(sc.length ? `${covN}/${sc.length}` : "—", "评分覆盖（评分项已有目录承接）", sc.length && covN < sc.length ? `${sc.length - covN} 项未排入目录 · 点击处理` : "", sc.length > 0 && covN < sc.length);
+  mk(`${prN}/${pr.length}`, "承诺拍板（值列为裸值即算已定）", pr.length - prN ? `${pr.length - prN} 项待你拍板` : "全部已定", (pr.length - prN) > 0);
+  mk(`${clN}/${cl.length}`, "澄清裁决", cl.length - clN ? `${cl.length - clN} 项待裁决` : "全部已裁决", (cl.length - clN) > 0);
+  mk(DATA.disq_count != null ? String(DATA.disq_count) : "—", "废标条款（要点全扫清单）", "", false);
+}
+function renderOverview() {
+  const pv = $("#parse"); pv.innerHTML = "";
+  $("#parse-sub").textContent = DATA.parse.length ? "识别方式如实标注可信度，⚠ 为质量警示" : "（本页由助手在解析后生成）";
+  for (const f of DATA.parse) {
+    const d = document.createElement("div"); d.className = "parse-file";
+    d.innerHTML = `<div class="fn">${esc(f.file)}${f.role && f.role !== "main" ? ` <span class="chip">${esc(f.role)}</span>` : f.role === "main" ? ` <span class="chip brand">主文件</span>` : ""}</div>
+      <div class="small muted num">${f.chars ? f.chars + " 字" : ""}${f.pages ? " / " + f.pages + " 页" : ""}${f.conversion ? " · " + esc(f.conversion) : ""}</div>` +
+      (f.warnings && f.warnings.length ? f.warnings.map(w => `<div class="warn">⚠️ ${esc(w)}</div>`).join("") : "");
+    pv.appendChild(d);
+  }
+  const sc = DATA.scores || [];
+  $("#score-sub").textContent = sc.length ? `${sc.length} 项 · 目录承接情况见右侧` : "";
+  const sch = $("#scores");
+  if (sc.length) {
+    const covered = id => Object.values(S.vol).some(v => (function w(ns) { for (const n of ns) { if (nodeBadges(n).includes(id)) return true; if (w(n.children)) return true; } return false; })(v.nodes));
+    const tbl = document.createElement("div");
+    for (const s of sc.slice(0, 12)) {
+      const cov = covered(s.id);
+      const d = document.createElement("div"); d.className = "kvrow";
+      d.innerHTML = `<span class="badge SCORE" style="cursor:default">${esc(s.id)}</span>
+        <b class="num" style="color:${/^\d+$/.test(String(s.score)) && Number(s.score) >= 10 ? "var(--brand)" : "var(--ink-2)"};display:inline-block;min-width:52px">${esc(String(s.score))}${/^\d+$/.test(String(s.score)) ? "分" : ""}</b>
+        ${esc(s.item)} <span class="small muted">${esc((s.points || "").slice(0, 40))}</span>
+        <span class="chip ${cov ? "ok" : "warn"}" style="float:right">${cov ? "✓ 已承接" : "未排入目录"}</span>`;
+      tbl.appendChild(d);
+    }
+    if (sc.length > 12) { const p = document.createElement("p"); p.className = "small muted"; p.textContent = `……其余 ${sc.length - 12} 项见要点文档`; tbl.appendChild(p); }
+    sch.appendChild(tbl);
+  } else sch.innerHTML = `<p class="muted small">暂无评分条目。</p>`;
+  const dq = $("#disq");
+  if (DATA.disq_count != null) {
+    $("#disq-sub").textContent = `共 ${DATA.disq_count} 条（唯一强制全扫的清单）`;
+    dq.innerHTML = (DATA.disq_top || []).map(t => `<div class="kvrow small"><span class="chip warn" style="margin-right:6px">废标</span>${esc(t.text)} <span class="mono muted">${esc(t.source || "")}</span></div>`).join("") || `<p class="muted small">清单见要点文档。</p>`;
+  } else { $("#disq-sub").textContent = ""; dq.innerHTML = `<p class="muted small">废标清单见要点文档（本页未解析出结构化条目）。</p>`; }
+}
+function submitClar(clarItems, gateItem) {
+  const patch = { clarifications: clarItems, gates: gateItem ? [gateItem] : [] };
+  if (S.online) {
+    setSaveState($("#savestate"), "saving");
+    fetch(API + "apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) })
+      .then(r => r.json()).then(j => {
+        if (j.ok) { S.lastSaved = new Date().toTimeString().slice(0, 5); toast(clarItems.length ? "裁决已记录" : "门确认已记录"); for (const c of clarItems) DATA.clar.verdicts[c.id] = { verdict: c.verdict, note: c.note, at: "刚刚" }; if (gateItem) DATA.decisions.gates.push({ ...gateItem, at: "刚刚" }); renderGates(); renderClar(); refreshSaveStates(); }
+        else { setSaveState($("#savestate"), "error"); toast((j.errors || ["应用失败"]).join("；"), 1); }
+      }).catch(() => { setSaveState($("#savestate"), "error"); goOffline(); });
+  } else {
+    for (const c of clarItems) DATA.clar.verdicts[c.id] = { ...c, at: "刚刚" };
+    if (gateItem) DATA.decisions.gates.push({ ...gateItem, at: "刚刚" });
+    renderGates(); renderClar();
+    toast("离线模式：裁决已暂存本页，请用「导出修改包」发回给助手");
+  }
+}
+
+/* ================= 保存 / 导出 / 草稿 / 心跳 ================= */
+function buildPatch() {
+  const d = dirtyState();
+  const patch = { base: cp(DATA.base), tree: [], guide: [], promises: [], clarifications: [], gates: [] };
+  for (const v of Object.keys(S.vol)) if (S.log[v].length > S.savedLogLen[v]) patch.tree.push({ vol: v, ops: S.log[v].slice(S.savedLogLen[v]) });
+  const fullRows = Object.fromEntries(DATA.guide.rows.map(r => [r.key, r]));
+  for (const [key, fields] of Object.entries(S.guideDirty)) patch.guide.push({ key, ...fields });
+  for (const key of Object.keys(S.guideRemoved)) patch.guide.push({ key, op: "remove" });
+  for (const [item, f] of Object.entries(S.promiseDirty)) patch.promises.push({ item, ...f });
+  return patch;
+}
+function patchHasBig(patch) { return patch.tree.length || patch.guide.length || patch.promises.length; }
+let saving = false;
+function saveAll(after) {
+  const patch = buildPatch();
+  if (!patchHasBig(patch)) { if (after) after(); refreshSaveStates(); return; }
+  if (S.tab === "tree" && structCount() > 0 && !S.structConfirmed) { renderStructBar(); const b = $("#struct-confirm"); if (b) { b.scrollIntoView({ behavior: "smooth", block: "center" }); b.classList.add("pulse"); toast("有结构性修改待确认：请先在确认条选择『继续保存』或『返回修改』", 1); return; } }
+  if (!S.online) { exportPatch(); return; }
+  if (saving) return; saving = true;
+  const els = [$("#savestate"), $("#tree-savestate"), $("#guide-savestate"), $("#promise-savestate")];
+  els.forEach(e => e && setSaveState(e, "saving"));
+  fetch(API + "apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) })
+    .then(r => r.json()).then(j => {
+      saving = false;
+      if (j.ok) {
+        for (const v of Object.keys(S.vol)) S.savedLogLen[v] = S.log[v].length;
+        S.guideDirty = {}; S.guideRemoved = {}; S.promiseDirty = {};
+        S.lastSaved = new Date().toTimeString().slice(0, 5);
+        els.forEach(e => e && setSaveState(e, "saved", S.lastSaved));
+        showReport(j.report);
+        draftClear();
+        if (after) after(); else setTimeout(() => location.reload(), 1200);
+      } else {
+        els.forEach(e => e && setSaveState(e, "error"));
+        if (j.stage === "base") showConflict(j.errors); else toast((j.errors || ["应用失败"]).join("；"), 1);
+      }
+    }).catch(() => { saving = false; els.forEach(e => e && setSaveState(e, "error")); goOffline(); });
+}
+function showReport(rep) {
+  const mask = document.createElement("div"); mask.className = "mask";
+  const m = document.createElement("div"); m.className = "modal report";
+  m.innerHTML = `<h4>已保存 ${esc((rep.written || []).length)} 个文件</h4>`;
+  const addSec = (title, items) => { if (!items || !items.length) return; const d = document.createElement("div"); d.innerHTML = `<div class="sec">${esc(title)}</div><ul>${items.map(x => `<li>${esc(typeof x === "string" ? x : JSON.stringify(x))}</li>`).join("")}</ul>`; m.appendChild(d); };
+  addSec("新增节点", rep.added); addSec("删除节点", rep.removed); addSec("改名", rep.renames);
+  addSec("指引更新", rep["写作指引_updated"]); addSec("指引新增", rep["写作指引_added"]);
+  addSec("承诺更新", rep["承诺清单_updated"]);
+  addSec("下游注意", rep.flags);
+  const b = document.createElement("button"); b.className = "btn primary"; b.style.marginTop = "12px"; b.textContent = "好的，刷新页面";
+  b.onclick = () => location.reload();
+  m.appendChild(b); mask.appendChild(m); $("#modal-slot").appendChild(mask);
+}
+function showConflict(errors) {
+  const host = $("#tree-banner"); host.innerHTML = "";
+  const b = document.createElement("div"); b.className = "banner danger";
+  b.innerHTML = `${esc(errors.join("；"))}<span class="spacer"></span>`;
+  const b1 = document.createElement("button"); b1.className = "btn sm"; b1.textContent = "拉取最新内容（刷新页面）";
+  b1.onclick = () => location.reload();
+  const b2 = document.createElement("button"); b2.className = "btn sm"; b2.textContent = "导出我的版本";
+  b2.onclick = exportPatch;
+  b.appendChild(b1); b.appendChild(b2); host.appendChild(b);
+  switchTab("tree");
+}
+function goOffline() {
+  if (!S.online) return;
+  S.online = false;
+  const c = $("#conn"); c.textContent = "离线模式"; c.classList.add("off");
+  const host = $("#ov-banner"); host.innerHTML = "";
+  const b = document.createElement("div"); b.className = "banner danger";
+  b.textContent = "评审台服务已断开——已切换离线模式，修改保留本页；可导出修改包发回给助手，或让助手重启服务后刷新页面。";
+  host.appendChild(b);
+  $("#guide-export-btn").hidden = false; $("#promise-export-btn").hidden = false;
+  toast("评审台服务已断开，已切换离线模式", 1);
+}
+function exportPatch() {
+  const patch = buildPatch();
+  if (!patchHasBig(patch)) return toast("没有待保存的修改", 1);
+  const txt = JSON.stringify(patch, null, 2);
+  const blob = new Blob([txt], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = "修改包.json"; a.click();
+  if (navigator.clipboard) navigator.clipboard.writeText(txt).then(() => toast("修改包已下载并复制到剪贴板——把它发给助手即可应用"), () => toast("修改包已下载——发给助手即可应用"));
+  else toast("修改包已下载——发给助手即可应用");
+}
+$("#guide-export-btn").onclick = exportPatch;
+$("#promise-export-btn").onclick = exportPatch;
+/* 草稿 */
+let draftTimer = null;
+function draftSoon() { if (!S.online) return; clearTimeout(draftTimer); draftTimer = setTimeout(draftSave, 1500); }
+function draftState() {
+  return { logs: S.log, guideDirty: S.guideDirty, guideRemoved: S.guideRemoved, promiseDirty: S.promiseDirty };
+}
+function draftSave() {
+  if (!S.online) return;
+  const d = dirtyState(); if (!d.any) return;
+  fetch(API + "draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draftState()) }).catch(() => {});
+}
+function draftClear() { if (S.online) fetch(API + "draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {}); }
+function draftRestore() {
+  const dr = DATA.draft;
+  if (!dr) return;
+  const host = $("#ov-banner"); const b = document.createElement("div"); b.className = "banner info";
+  b.innerHTML = `检测到未应用的草稿（${esc(dr.at || "")}）——上次编辑没保存。`;
+  const b1 = document.createElement("button"); b1.className = "btn sm primary"; b1.style.marginRight = "8px"; b1.textContent = "恢复草稿";
+  b1.onclick = () => {
+    for (const [v, ops] of Object.entries(dr.logs || {})) {
+      if (!S.vol[v]) continue;
+      for (const op of ops) try { replayOp(v, op); } catch (e) { /* 跳过失效 op */ }
+      S.log[v] = ops.slice();
+    }
+    S.guideDirty = dr.guideDirty || {}; S.guideRemoved = dr.guideRemoved || {}; S.promiseDirty = dr.promiseDirty || {};
+    b.remove(); renderVolumes(); refreshNumbering(); renderGuideTree(); renderGuidePills(); renderPromises(); refreshSaveStates();
+    toast("草稿已恢复（未保存，继续编辑后点保存）");
+  };
+  const b2 = document.createElement("button"); b2.className = "btn sm"; b2.textContent = "丢弃";
+  b2.onclick = () => { b.remove(); draftClear(); };
+  b.appendChild(b1); b.appendChild(b2); host.appendChild(b);
+}
+function replayOp(volName, op) {
+  const roots = S.vol[volName].nodes;
+  const at = p => { let list = roots, n = null; for (const i of p) { n = list[i]; list = n.children; } return n; };
+  if (op.op === "rename") at(op.path).text = op.text;
+  else if (op.op === "add") (op.parent && op.parent.length ? at(op.parent).children : roots).splice(op.index, 0, { uid: uidc(), text: op.text, src: [], desc: null, children: [] });
+  else if (op.op === "remove") (op.path.length === 1 ? roots : at(op.path.slice(0, -1)).children).splice(op.path[op.path.length - 1], 1);
+  else if (op.op === "move") {
+    const n = at(op.path);
+    (op.path.length === 1 ? roots : at(op.path.slice(0, -1)).children).splice(op.path[op.path.length - 1], 1);
+    (op.to_parent && op.to_parent.length ? at(op.to_parent).children : roots).splice(op.index, 0, n);
+  }
+}
+/* 心跳 */
+function beat() {
+  if (!ONLINE) { const c = $("#conn"); c.textContent = "离线模式（静态页面）"; c.classList.add("off"); return null; }
+  const t = setInterval(() => {
+    fetch(API + "healthz").then(r => { if (!r.ok) throw 0; if (!S.online) { location.reload(); } })
+      .catch(() => goOffline());
+  }, 5000);
+  return t;
+}
+
+/* ================= 启动 ================= */
+function boot() {
+  $("#proj").textContent = DATA.project["项目名称"] || "";
+  S.clar = {};
+  if (!ONLINE) { const c = $("#conn"); c.textContent = "离线模式（静态页面）"; c.classList.add("off"); }
+  else {
+    fetch(API + "healthz").then(r => r.json()).then(() => { $("#conn").textContent = "已连接 · 本地服务"; }).catch(() => goOffline());
+  }
+  renderOverview(); renderKpis(); renderGates(); renderClar();
+  renderVolumes(); refreshNumbering();
+  renderGuideTree(); renderGuidePills(); renderGuideDetail();
+  renderPromises();
+  tabCount(); refreshSaveStates();
+  const h = new URLSearchParams(location.hash.slice(1)).get("tab");
+  if (h && ["overview", "tree", "guide", "promise"].includes(h)) switchTab(h);
+  if (DATA.draft) draftRestore();
+  beat();
+  document.addEventListener("keydown", e => {
+    if (e.key === "s" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveAll(); }
+  });
+}
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+{
+  "_说明": "评审台修改包格式示例（虚构数据）。base 三键为对应 md 文件生成页面时的 sha256——评审台在 localhost 服务模式下自动带上；file:// 离线导出时页面同样会嵌入。tree 路径为册内兄弟索引数组（[3,0]=第 4 个顶层节点的第 1 个子节点，[]=顶层），索引按 op 顺序在前序 op 之后的树上解释；指引/承诺只写要改的列，缺省列保持原值。",
+  "base": {
+    "outline": "（由评审台页面自动填充：work/outline/tender-response-docs.md 的 sha256）",
+    "guide": "（由评审台页面自动填充：work/body/写作指引.md 的 sha256）",
+    "promise": "（由评审台页面自动填充：work/body/关键事实与承诺.md 的 sha256）"
+  },
+  "tree": [
+    {
+      "vol": "投标文件",
+      "ops": [
+        { "op": "rename", "path": [3, 0], "text": "总体架构设计" },
+        { "op": "add", "parent": [4], "index": 0, "text": "安全保障措施" },
+        { "op": "move", "path": [4, 1], "to_parent": [], "index": 6 },
+        { "op": "remove", "path": [8] }
+      ]
+    }
+  ],
+  "guide": [
+    { "key": "总体架构设计", "mode": "素材修订", "basis": "REQ-04、SCORE-02", "note": "章名调整：架构设计→总体架构设计" },
+    { "key": "安全保障措施", "mode": "推理撰写", "basis": "REQ-04", "material": "—", "figure": "—", "note": "评审台新增章，覆盖数据安全横切要求" }
+  ],
+  "promises": [
+    { "item": "计划进场日期", "value": "2027-01-05", "note": "用户在评审台拍板" }
+  ],
+  "clarifications": [
+    { "id": "CLAR-01", "verdict": "按建议", "note": "按招标代理答复口径" }
+  ],
+  "gates": [
+    { "gate": "G3", "verdict": "pass", "note": "目录调整后确认" }
+  ]
+}
