@@ -454,6 +454,32 @@ def _content_col_weights(hspecs, rspecs, grid_w: int) -> list[int] | None:
     return [max(6, min(50, n)) for n in lens]
 
 
+def _fit_widths(cols: list[int], content_tw: int) -> list[int]:
+    """列宽收口：300 dxa 下限钳保户会把总和顶过版心，「余数贴末列」会把末列
+    压成负数（corrupt 表）。版心有余照贴；已溢出时从非末列的可收空间按比例
+    收回超出量（各列保 300 下限、总宽收回版心）；全部顶到下限仍放不下时接受
+    表宽略超版心（负 dxa 才是 corrupt）。"""
+    diff = content_tw - sum(cols)
+    if diff >= 0:
+        cols[-1] += diff  # 版心有余：余数贴末列
+        return cols
+    over = -diff  # 超出量：从非末列按比例收回
+    flexible = [i for i in range(len(cols) - 1) if cols[i] > 300]
+    pool = sum(cols[i] - 300 for i in flexible)
+    if pool:
+        for i in flexible:
+            take = min(cols[i] - 300, int(over * (cols[i] - 300) / pool))
+            cols[i] -= take
+            over -= take
+    for i in flexible:  # 按比例取整的零头顺次补收
+        if over <= 0:
+            break
+        take = min(over, cols[i] - 300)
+        cols[i] -= take
+        over -= take
+    return cols  # 仍收不齐（全顶下限）= 接受表宽略超版心
+
+
 def _grid_col_widths(blk: dict, grid_w: int, content_tw: int,
                      auto_w: list[int] | None = None) -> list[int]:
     weights = blk.get("widths")
@@ -464,19 +490,13 @@ def _grid_col_widths(blk: dict, grid_w: int, content_tw: int,
         if wsum <= 0:
             weights = None
         else:
-            cols = [max(300, int(content_tw * float(x) / wsum)) for x in weights]
-            cols[-1] += content_tw - sum(cols)
-            return cols
+            return _fit_widths(
+                [max(300, int(content_tw * float(x) / wsum)) for x in weights], content_tw)
     if auto_w and len(auto_w) == grid_w and len(set(auto_w)) > 1:
         # 无 widths：按各列内容长度比例分配（长内容列变宽，评委好读）
         wsum = sum(auto_w)
-        cols = [max(300, int(content_tw * w / wsum)) for w in auto_w]
-        cols[-1] += content_tw - sum(cols)
-        return cols
-    base = max(300, content_tw // grid_w)
-    cols = [base] * grid_w
-    cols[-1] += content_tw - sum(cols)
-    return cols
+        return _fit_widths([max(300, int(content_tw * w / wsum)) for w in auto_w], content_tw)
+    return _fit_widths([max(300, content_tw // grid_w)] * grid_w, content_tw)
 
 
 def _make_tr(specs: list[tuple[str, int, str | None]], col_w: list[int], *,
@@ -1597,18 +1617,13 @@ def cmd_assemble(args) -> None:
 
 
 def _shrink_trailing_blank(master: Document) -> None:
-    """册尾空段压近零：表格结尾时 Word 规范强制保留一个段落，满行高会在内容
-    恰好填满时挤出一张空白尾页（交付观感）。压成 2pt 定行高空段，视觉上消失。"""
+    """册尾连续空段全压成 2pt 定行高：表格结尾时 Word 规范强制保留一个段落，
+    满行高会在内容恰好填满时挤出空白尾页（交付观感）。素材尾部常带连续空段，
+    只压末段压不干净——逐个向前压，遇内容/图/批注引用停；带分节符的段不压
+    （重建 pPr 会把 w:sectPr 一起剥掉、吞分节）。"""
     body = master.element.body
-    for child in reversed(list(body)):
-        if child.tag == qn("w:sectPr"):
-            continue
-        if child.tag != qn("w:p"):
-            return  # 最后一个实体元素不是段落——无册尾空段问题
-        if any((t.text or "").strip() for t in child.findall(".//" + qn("w:t"))):
-            return  # 末段有内容
-        if child.findall(".//" + qn("w:drawing")) or child.findall(".//" + qn("w:commentReference")):
-            return  # 末段带图/批注引用，不动
+
+    def shrink(p_el) -> None:
         ppr = OxmlElement("w:pPr")  # 整体重建 pPr：spacing→rPr 顺序 schema 安全
         spacing = OxmlElement("w:spacing")
         spacing.set(qn("w:before"), "0")
@@ -1617,18 +1632,29 @@ def _shrink_trailing_blank(master: Document) -> None:
         spacing.set(qn("w:lineRule"), "exact")
         ppr.append(spacing)
         rpr = OxmlElement("w:rPr")
-        sz = OxmlElement("w:sz")
-        sz.set(qn("w:val"), "4")  # 2pt
-        rpr.append(sz)
-        szcs = OxmlElement("w:szCs")
-        szcs.set(qn("w:val"), "4")
-        rpr.append(szcs)
+        for tag in ("w:sz", "w:szCs"):
+            el = OxmlElement(tag)
+            el.set(qn("w:val"), "4")  # 2pt
+            rpr.append(el)
         ppr.append(rpr)
-        old = child.find(qn("w:pPr"))
+        old = p_el.find(qn("w:pPr"))
         if old is not None:
-            child.remove(old)
-        child.insert(0, ppr)
-        return
+            p_el.remove(old)
+        p_el.insert(0, ppr)
+
+    for child in reversed(list(body)):
+        if child.tag == qn("w:sectPr"):
+            continue
+        if child.tag != qn("w:p"):
+            return  # 最后的实体元素不是段落——无册尾空段问题
+        if any((t.text or "").strip() for t in child.findall(".//" + qn("w:t"))):
+            return  # 末段有内容
+        if child.findall(".//" + qn("w:drawing")) or child.findall(".//" + qn("w:commentReference")):
+            return  # 末段带图/批注引用，不动
+        old_ppr = child.find(qn("w:pPr"))
+        if old_ppr is not None and old_ppr.find(qn("w:sectPr")) is not None:
+            return  # 分节符段落：动它=吞分节
+        shrink(child)  # 压掉后继续向前，连续空段全压
 
 
 def _section_file(body_dir: Path, vol_name: str, title: str, multi: bool) -> Path | None:
