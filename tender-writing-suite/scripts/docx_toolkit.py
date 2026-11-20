@@ -1183,7 +1183,8 @@ def _clear_table_cell_indents(master: Document) -> None:
 
 def _clone_break_sectpr(master: Document, landscape: bool):
     """克隆终节属性做段内分节符：剥 titlePg 与 first/even 引用（default 保留，
-    页码跨节连续——titlePg 节后跟普通节在 LibreOffice 下会页码错位，实测矩阵）。"""
+    页码跨节连续——titlePg 节后跟普通节在 LibreOffice 下会页码错位，实测矩阵）。
+    pgNumType 一并剥除——正文中途的横版区段分节绝不能继承「自 1 重起」。"""
     final = master.element.body.find(qn("w:sectPr"))
     if final is None:
         return None
@@ -1191,9 +1192,10 @@ def _clone_break_sectpr(master: Document, landscape: bool):
     for ref in sect.findall(qn("w:headerReference")) + sect.findall(qn("w:footerReference")):
         if ref.get(qn("w:type")) in ("first", "even"):
             sect.remove(ref)
-    tp = sect.find(qn("w:titlePg"))
-    if tp is not None:
-        sect.remove(tp)
+    for tag in ("w:titlePg", "w:pgNumType"):
+        tp = sect.find(qn(tag))
+        if tp is not None:
+            sect.remove(tp)
     sz = sect.find(qn("w:pgSz"))
     if sz is not None:
         try:
@@ -1290,12 +1292,35 @@ def _apply_landscape_regions(master: Document, chapter_plan: list, landscape_tit
         i = j + 1
 
 
-def _cover_section_no_footer(master: Document, toc_marker) -> bool:
-    """封面独立成节且零页眉页脚引用——比 titlePg 更稳：LibreOffice 下
-    titlePg 节后跟普通节会页码错位（实测矩阵 m1/m3），零引用封面节 +
-    default 页脚的后续节页码全程连续（m5）。终节同步剥 titlePg/first 引用。
-    无目录锚点时返回 False（调用方退回 titlePg 方案）。"""
-    if toc_marker is None:
+_PGNUMTYPE_AFTER = ("w:cols", "w:formProt", "w:vAlign", "w:noEndnote", "w:titlePg",
+                    "w:textDirection", "w:bidi", "w:rtlGutter", "w:docGrid",
+                    "w:printerSettings", "w:sectPrChange")
+
+
+def _restart_pagenum_at_one(sect) -> None:
+    """正文节页码自 1 重起（w:pgNumType w:start=1，按 CT_SectPr 元素序插入——
+    python-docx 未建模该元素，无 API）。幂等。"""
+    if sect.find(qn("w:pgNumType")) is not None:
+        return
+    pg = OxmlElement("w:pgNumType")
+    pg.set(qn("w:start"), "1")
+    for tag in _PGNUMTYPE_AFTER:
+        succ = sect.find(qn(tag))
+        if succ is not None:
+            succ.addprevious(pg)
+            return
+    sect.append(pg)
+
+
+def _front_section_no_pagenum(master: Document, toc_end, toc_marker) -> bool:
+    """前置整节（封面/前置/目录页）零页眉页脚引用、页码不编；正文节（终节）
+    页码自 1 重起——行业惯例（2026-11-20 拍板：标书正文第一页=第 1 页）。
+    分节符插在目录块结束锚点之后：封面/前置/目录同属前置节，目录页也不带
+    页码。零引用前置节 + default 页脚正文节的组合沿自实测矩阵 m5（比 titlePg
+    稳：LibreOffice 下 titlePg 节后跟普通节会页码错位 m1/m3）。无目录锚点时
+    返回 False（调用方退回 titlePg 方案，此时页码从封面连续编）。"""
+    anchor = toc_end if toc_end is not None else toc_marker
+    if anchor is None:
         return False
     final = master.element.body.find(qn("w:sectPr"))
     if final is None:
@@ -1316,13 +1341,24 @@ def _cover_section_no_footer(master: Document, toc_marker) -> bool:
     tp = sect.find(qn("w:titlePg"))
     if tp is not None:
         sect.remove(tp)
-    toc_marker.addprevious(_para_with_sect(sect))
+    anchor.addnext(_para_with_sect(sect))
     tp = final.find(qn("w:titlePg"))
     if tp is not None:
         final.remove(tp)
     for ref in final.findall(qn("w:headerReference")) + final.findall(qn("w:footerReference")):
         if ref.get(qn("w:type")) in ("first", "even"):
             final.remove(ref)
+    # 页码重起落在**正文首节**的 sectPr 上=文档序中紧随前置分节符之后的第一个
+    # sectPr。无横版区段时即终节；有横版区段时横版补分节已在正文首节与终节
+    # 之间再切节——落在终节会让重起被中途分节吞掉（其后各段仍从封面连续编）
+    seen = False
+    for sp in master.element.body.iter(qn("w:sectPr")):
+        if sp is sect:
+            seen = True
+            continue
+        if seen:
+            _restart_pagenum_at_one(sp)
+            break
     return True
 
 
@@ -1466,8 +1502,9 @@ def cmd_assemble(args) -> None:
 
         for top in vol["tree"]:
             _emit_node(top, 1)
+        toc_end = None
         if toc_marker is not None:
-            _fill_toc(master, toc_marker, toc_entries)
+            toc_end = _fill_toc(master, toc_marker, toc_entries)
         _restyle_all(master, chapter_plan, args.numbering)
         _apply_body_indents(master)
         _clear_table_cell_indents(master)
@@ -1480,10 +1517,11 @@ def cmd_assemble(args) -> None:
             if f.name.startswith("整本-") or f in used_files:
                 continue
             warnings.append(f"目录外文件：{f.as_posix()}（不在目录树中，未并入）")
-        # 批注迁移 + 打开自动刷新域（目录出真页码）+ 封面不带页码
+        # 批注迁移 + 打开自动刷新域（目录出真页码）+ 前置整节不编页码（封面/
+        # 前置/目录页），正文节页码自 1 重起（2026-11-20 拍板：行业惯例）
         n_comments = _merge_comments(master, used_files)
         _enable_update_fields(master)
-        if not _cover_section_no_footer(master, toc_marker):
+        if not _front_section_no_pagenum(master, toc_end, toc_marker):
             _fix_first_page(master)  # 无目录锚点的退化路径：退回 titlePg 方案
         out_path = body_dir / out_name
         composer.save(str(out_path))
@@ -1575,14 +1613,16 @@ def _enable_update_fields(doc: Document) -> None:
         settings.insert(0, uf)
 
 
-def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]) -> None:
+def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]):
     """在目录标题段之后插入静态条目（TOC 域包裹；条目带点线制表位——
-    未更新域前也有目录观感，Word/WPS 打开经 updateFields 刷新出真页码）。"""
+    未更新域前也有目录观感，Word/WPS 打开经 updateFields 刷新出真页码）。
+    返回目录块结束锚点（域 end 段）——合册分节符插在它之后，目录页归
+    前置节、不带页码。"""
     from docx.enum.text import WD_TAB_ALIGNMENT, WD_TAB_LEADER
     from docx.text.paragraph import Paragraph
 
     if marker is None or not entries:
-        return
+        return None
     prev = marker
 
     def _insert_after(el, ref):
@@ -1626,6 +1666,7 @@ def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]) ->
     first.insert(base, sep)
     first.insert(base, instr)
     first.insert(base, fld)
+    return endp
 
 
 def _heading_para(master: Document, title: str):
@@ -1867,8 +1908,11 @@ def _page_has_heading(lines: list[str], want: str) -> bool:
     return False
 
 
-def _measure_heading_pages(pdf_path: Path, labels: list[str]) -> dict[str, int]:
-    """按渲染 PDF 实测各目录条目标题所在页（物理页号=页脚号，封面计 1）。
+def _measure_heading_pages(pdf_path: Path, labels: list[str],
+                           restart: bool = False) -> dict[str, int]:
+    """按渲染 PDF 实测各目录条目标题所在页。restart=整本带页码重起（前置整节
+    不编页码、正文自 1 重起）：条目写正文显示页号=物理页号−前置页数（首个
+    非目录页即正文首页，显示为 1）；否则写物理页号（封面计 1，旧口径）。
     从目录页之后开始找（目录页本身含同名条目，不排除会把自己的页码当命中）。"""
     import pypdfium2 as pdfium
 
@@ -1888,6 +1932,7 @@ def _measure_heading_pages(pdf_path: Path, labels: list[str]) -> dict[str, int]:
         while end + 1 < len(has_leader) and has_leader[end + 1]:
             end += 1
         start = end + 1
+    off = start if restart else 0  # 前置页数=正文首页的 0 基下标（封面/前置/目录）
     mapping: dict[str, int] = {}
     for label in labels:
         want = _norm_label(label)
@@ -1895,10 +1940,20 @@ def _measure_heading_pages(pdf_path: Path, labels: list[str]) -> dict[str, int]:
             continue
         for i in range(start, len(pages_lines)):
             if _page_has_heading(pages_lines[i], want):
-                mapping[label] = i + 1
+                mapping[label] = i + 1 - off
                 break
     pdf.close()
     return mapping
+
+
+def _has_pagenum_restart(docx_path: Path) -> bool:
+    """整本是否带页码重起（正文节 pgNumType start）——决定目录条目写
+    正文显示页号还是物理页号；旧版合册文件（连续编页）自动走旧口径。"""
+    doc = Document(str(docx_path))
+    for sect in doc.element.body.iter(qn("w:sectPr")):
+        if sect.find(qn("w:pgNumType")) is not None:
+            return True
+    return False
 
 
 def _set_entry_page(p, page: int) -> bool:
@@ -1988,13 +2043,16 @@ def cmd_toc_pages(args) -> None:
 
     import tempfile
 
+    restart = _has_pagenum_restart(docx_path)
+    if restart:
+        print("  页码口径：前置（封面/目录）不编页码，目录条目写正文页号（自 1 起）")
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         profile = tmp / "profile"
         mapping_prev: dict[str, int] | None = None
         for _ in range(3):
             pdf = _lo_convert(soffice, docx_path, tmp, profile)
-            mapping = _measure_heading_pages(pdf, labels)
+            mapping = _measure_heading_pages(pdf, labels, restart)
             if mapping == mapping_prev:
                 break
             mapping_prev = mapping

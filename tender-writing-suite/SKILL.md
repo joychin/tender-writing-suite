@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Review the disqualification clauses and scoring criteria, and organize them into tables"
   - "Write chapter 3 following the outline, referencing my past proposal"
-version: 1.1.3
+version: 1.1.4
 author: 灵燕智能
 ---
 
@@ -198,12 +198,15 @@ python3 scripts/docx_toolkit.py toc-pages "work/body/整本-投标文件.docx" -
 
 环境有 LibreOffice 才执行（自动探测，没有则打印提示并跳过，不影响流程）；页码按
 实际渲染测量写入并自动复核收敛，重复执行幂等；只改目录条目、正文段落零改动，
-自检不过自动回滚到运行前内容。
+自检不过自动回滚到运行前内容。页码口径=正文显示页号（前置不编、正文自 1 起）；
+整本文件本身不带页码重起时，按物理页号（封面计 1）写。
 
 按目录树序产出每册一个 `work/body/整本-<册名>.docx`：章节标题按树序自动编号
 （`--numbering` 取 chapter=第X章/1.1、decimal=1/1.1、gov=一、/（一）/1.、none），
 封面=整本首页、前置区不占章号、目录页机械生成（Word 目录域+章节清单，Word/WPS
 更新域得带页码目录）、节内小标题摘出导航大纲并按树深度接续节号、待办批注原样迁移。
+**页码=行业惯例**：封面/前置/目录整节不编页码，正文分节自第 1 页起编（正文第一页
+页脚显示 1）；目录条目与 `--map` 页码同此口径。
 返回的警告（缺失节/未并入文件/占位残留）逐条向用户点名。
 **整本是派生产物**：改内容回节文件层改再重新合册，直接手改整本会被下次合册覆盖。
 
