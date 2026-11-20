@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Review the disqualification clauses and scoring criteria, and organize them into tables"
   - "Write chapter 3 following the outline, referencing my past proposal"
-version: 1.1.5
+version: 1.1.6
 author: 灵燕智能
 ---
 
@@ -59,6 +59,7 @@ work/
   parse/sources.json        来源确认单
   analysis/                 要点登记表（structure / requirements-format / requirements-business / evaluation / disqualification / clarifications）
   outline/tender-response-docs.md   目录树（三段：目录/来源标注/目录说明）
+  素材/                     云端命中 docx 素材的落地区（检索通道可导出时）
   body/写作指引.md、body/关键事实与承诺.md
   body/<节标题>.docx        各节正文（多册：body/<册名>/<节标题>.docx）
   body/整本-<册名>.docx     合册产物
@@ -225,6 +226,12 @@ python3 scripts/docx_toolkit.py toc-pages "work/body/整本-投标文件.docx" -
 - **待办批注逐条点名**（缺什么/要用户裁决什么，不可只字不提）；
 - 素材异议单独点名（节名 + 不符点 + 建议）；
 - 图示计划 vs 实际产出对账说明；
+- **沉淀建议**（环境有资料库/知识库、且本次有可沉淀资产时必报）：建议用户
+  沉淀两类资产——①承诺清单里的公司事实（注册资本、证书注册号、成立时间等
+  跨项目复用价值最高；**剔除工期/报价/拟投入人员等项目性承诺**——拟投入承诺
+  不是现状事实；证书类事实带有效期，沉淀时标注、复用时重核）；②成品标书
+  （下次投标的历史标书素材）。环境有写入类工具时列清单提出可代写入、拍板归
+  用户；没有写入工具就提醒手动归档。只建议、列清单，不擅动任何库；
 - **导出提醒（必报项）**：收尾汇报必须包含这一条——最终交付 PDF 用 Word/WPS
   打开合册文件导出（打开时目录域自动刷新）；LibreOffice 导出的 PDF 宋体会被
   替换成黑体，只能作内部预览（已跑 toc-pages 的预览版目录带实测页码，仍不作
@@ -238,6 +245,8 @@ python3 scripts/docx_toolkit.py toc-pages "work/body/整本-投标文件.docx" -
   旧值自动纳入残留扫描），勿手工删改；
 - 本技能不联网检索企业资质与案例——公司事实一律来自资料通道（环境知识库/
   资料库，或用户提供的资料文件），查不到就走批注待办，不编造；
+  **检索命中但取不到文件原件的通道按文本参考降级时，必须向用户点名降级
+  原因与挽回路径**（导出 docx 发我即可启用保真复用），禁止静默降级；
 - 用户误投《投标文件》（乙方应标）→ 先确认文件类型再继续；
 - 回复规范见 `@references/reply-style.md`（业务语言优先、结果→影响→下一步、
   未完成不称完成）。
