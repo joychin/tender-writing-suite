@@ -23,11 +23,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 from docx_toolkit import build_tree, iter_blocks, parse_outline, sanitize_name  # noqa: E402
 
 from docx import Document  # noqa: E402
+from docx.oxml.ns import qn  # noqa: E402
 
 PLACEHOLDER = re.compile(r"【\s*(待补|待澄清|待确认|待补充|待定|待核验)[^】]*】|TODO|FIXME")
 MD_RESIDUE = re.compile(r"^(#{1,6}\s|\||\*\*|```)")
 WEAK_MD = re.compile(r"^-\s")
 MATERIAL_TOKEN = re.compile(r"^(.+\.docx)\s+L(\d+)(?:-L?(\d+))?$")
+# 小标题自带编号形态（一、/（一）/1. 式）——合册按树深度接续节号，会双重编号
+HEADING_NUMBERING = re.compile(r"^[一二三四五六七八九十]+、|^[（(][一二三四五六七八九十]+[)）]|^\d+[.、]")
 LEGAL_MODES = {"素材修订", "格式跟随", "推理撰写", "—"}
 
 
@@ -50,6 +53,21 @@ def die(msg: str, code: int = 1):
 
 def norm(s: str) -> str:
     return re.sub(r"\s+", "", s or "")
+
+
+def digit_seq_hit(value: str, texts: list[str]) -> bool:
+    """承诺比对宽松复核：值里的数字序列按原顺序出现在任一正文里（空格/标点/
+    同义前后缀差异放行，如「每天10万对」↔「日均 10 万对」、「7×24」↔「7*24」）。
+    值无数字（纯文字承诺）不算命中——无信号可核。"""
+    seq = re.findall(r"\d+(?:\.\d+)?", value)
+    if not seq:
+        return False
+    for t in texts:
+        tseq = re.findall(r"\d+(?:\.\d+)?", t)
+        it = iter(tseq)
+        if all(any(d == x for x in it) for d in seq):
+            return True
+    return False
 
 
 def shingles(text: str, k: int = 10) -> set[str]:
@@ -191,11 +209,37 @@ def check_section(work: Path, section: Path) -> tuple[list[str], list[str]]:
                 warnings.append(f"{loc} 疑似列表残字（正文应为完整句）：{line.strip()[:40]}")
     warnings += scan_ai_flavor(section.stem, labeled)
 
-    h1 = [pp.text.strip() for pp in Document(str(section)).paragraphs
+    sec_doc = Document(str(section))
+    h1 = [pp.text.strip() for pp in sec_doc.paragraphs
           if (pp.style.name or "").startswith(("Heading 1", "标题 1")) and pp.text.strip()]
     if len(h1) > 1:
         issues.append(f"节内有 {len(h1)} 个一级标题（{'、'.join(h1[:3])}）——"
                       f"素材拷贝带入的源章标题未删，合册后会出现双章标题，删到只剩本节标题")
+    numbered = [pp.text.strip() for pp in sec_doc.paragraphs
+                if (pp.style.name or "").startswith(("Heading 2", "Heading 3", "Heading 4",
+                                                     "标题 2", "标题 3", "标题 4"))
+                and HEADING_NUMBERING.match(pp.text.strip())]
+    if numbered:
+        issues.append(f"小标题自带编号（{'、'.join(t[:24] for t in numbered[:3])}）——"
+                      f"合册按树深度接续节号，会双重编号；改为陈述性短语，层级用 Heading 2/3 表达")
+
+    # 尾部空段（表后规范空段豁免 1 个；建节不补尾空段，多余的是合册空白页来源）
+    kids = [c for c in sec_doc.element.body if c.tag != qn("w:sectPr")]
+    tail = 0
+    for c in reversed(kids):
+        if c.tag != qn("w:p"):
+            break
+        if any((t.text or "").strip() for t in c.findall(".//" + qn("w:t"))):
+            break
+        if c.findall(".//" + qn("w:drawing")) or c.findall(".//" + qn("w:commentReference")):
+            break
+        tail += 1
+    if tail:
+        prev = kids[len(kids) - tail - 1] if tail < len(kids) else None
+        allowed = 1 if prev is not None and prev.tag == qn("w:tbl") else 0
+        if tail > allowed:
+            warnings.append(f"节尾有 {tail} 个空段落（表后规范空段已豁免）——多余空段在合册"
+                            f"分页后会顶出空白页，删掉")
 
     # 素材使用率与残留提示（从指引行取该节的素材区间）
     guide_path = work / "body" / "写作指引.md"
@@ -258,11 +302,19 @@ def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]
                     issues.append(f"{p.name}:{loc} 占位文字：{line.strip()[:40]}")
                     n_ph += 1
         warnings += scan_ai_flavor(p.stem, labeled)
-        h1 = [pp.text.strip() for pp in Document(str(p)).paragraphs
+        gdoc = Document(str(p))
+        h1 = [pp.text.strip() for pp in gdoc.paragraphs
               if (pp.style.name or "").startswith(("Heading 1", "标题 1")) and pp.text.strip()]
         if len(h1) > 1:
             issues.append(f"{p.name} 内有 {len(h1)} 个一级标题（{'、'.join(h1[:3])}）——"
                           f"素材拷贝带入的源章标题未删，合册后会出现双章标题，删到只剩本节标题")
+        numbered = [pp.text.strip() for pp in gdoc.paragraphs
+                    if (pp.style.name or "").startswith(("Heading 2", "Heading 3", "Heading 4",
+                                                         "标题 2", "标题 3", "标题 4"))
+                    and HEADING_NUMBERING.match(pp.text.strip())]
+        if numbered:
+            issues.append(f"{p.name} 小标题自带编号（{'、'.join(t[:24] for t in numbered[:3])}）——"
+                          f"合册按树深度接续节号，会双重编号；改为陈述性短语")
 
     # 承诺比对 + 旧值快照（清单值变更时旧值自动纳入残留扫描）
     promise_path = body_dir / "关键事实与承诺.md"
@@ -278,7 +330,12 @@ def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]
             if len(v) < 2:
                 continue
             current_values.add(v)
-            if not any(v in norm(full) for full, _ in texts.values()):
+            hit = any(v in norm(full) for full, _ in texts.values())
+            if not hit and digit_seq_hit(v, [norm(full) for full, _ in texts.values()]):
+                # 数字吻合仅措辞差异：与真漏写分开（拦截级误报会让报警失去分辨力）
+                warnings.append(f"承诺值写法差异（数字吻合）：{value}（事项：{item}）"
+                                f"——正文未按清单原文落值，人工归一（改正文措辞或更新清单）")
+            elif not hit:
                 issues.append(f"承诺值未落进任何正文：{value}（事项：{item}）——该节未写或值被改写")
         snap_path = body_dir / PROMISE_SNAPSHOT
         prev: set[str] | None = None

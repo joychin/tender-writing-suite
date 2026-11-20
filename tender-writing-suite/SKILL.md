@@ -19,7 +19,7 @@ examples_en:
   - "Write chapter 3 following the outline, referencing my past proposal"
   - "What materials do I need to prepare for this bid?"
   - "Plan the technical proposal outline based on the scoring criteria"
-version: 1.1.11
+version: 1.1.12
 author: 灵燕智能
 ---
 
@@ -155,8 +155,8 @@ python3 scripts/docx_toolkit.py copy-from <源.docx> "<节.docx>" --lines L120-L
 python3 scripts/docx_toolkit.py read     "<节.docx>"
 python3 scripts/docx_toolkit.py revise   "<节.docx>" --para P3 --mode replace --find 旧 --text 新
 python3 scripts/docx_toolkit.py revise   "<节.docx>" --cell T1R2C3 --text "填入值"
-python3 scripts/docx_toolkit.py comment  "<节.docx>" --para P5 --text "待办：…"
-python3 scripts/docx_toolkit.py image    "<节.docx>" --img <图片文件> [--after-para P2]
+python3 scripts/docx_toolkit.py comment  "<节.docx>" --para P5 --text "待办：…"   # 表格格子用 --cell T1R2C3
+python3 scripts/docx_toolkit.py image    "<节.docx>" --img <图片文件> [--after-para P2] [--caption "图3-1 ××说明"]
 python3 scripts/docx_toolkit.py render-page <扫描件.pdf> 3 -o page3.png   # PDF 页转图（证书扫描件贴图用）
 python3 scripts/docx_toolkit.py diagram gantt.png --kind gantt --spec gantt.json
 #   真图通道（需环境有 matplotlib 且检测到中文字体；两者缺一即报错提示改用表格表达）
@@ -169,9 +169,11 @@ python3 scripts/docx_toolkit.py diagram gantt.png --kind gantt --spec gantt.json
 - **格式跟随**：copy-from 拷招标格式件出处区间 → read → revise 填空（我方信息按
   承诺清单，未定值批注）；pdf 原件按文本在 create 成形；
 - **推理撰写**：create 的 body 块序列一次成形（表格类内容用 table 块，不流水句铺）。
+  段落块可带 style：h2/h3/h4（真标题样式，编号归合册——h1 禁用，节标题走 --title）。
   表格块支持合并格与列宽：cell 可写 `{"t": 值, "span": 跨列数}`（水平合并）或
   `{"t": 值, "vm": "restart"}/{"t": "", "vm": "continue"}`（竖向合并首/续行），
-  `widths` 给相对列宽（如 `[2,2,3,1]`）——网格不齐会报错不产表；列 ≥9 自动小字号
+  `widths` 给相对列宽（如 `[2,2,3,1]`），不写时按各列内容长度自动分配（长内容列
+  变宽）——网格不齐会报错不产表；列 ≥9 自动小字号
   紧凑边距；**宽表节（如 12 列资信表）建节加 `--landscape` 出横版页**。招标格式件
   的原表仍走 copy-from 保真拷贝，自建表才用本引擎；
   图示按指引计划以表格表达；
@@ -180,7 +182,8 @@ python3 scripts/docx_toolkit.py diagram gantt.png --kind gantt --spec gantt.json
   废标级资格件绝不许只登记不建节**；目录容器跳过、待核验先问用户；
 - **缺料/待澄清/待核验一律 `comment` 加 Word 批注**（写正文继续不阻塞）——**正文里
   禁止写【待补】【待澄清】占位文字**（会随交付稿出去，校验判不过）；
-- 每节写完 `python3 scripts/check_writing.py --section "<节.docx>"` 自查，按报错修复；
+- 每节写完 `python3 scripts/check_writing.py --section "<节.docx>"` 自查（占位/残字/
+  小标题自带编号/多余尾空段都会点名），按报错修复；
 - **并行分派（环境有子任务/代理类工具时按此执行；没有则逐节顺序跑，结果等价）**：
   各节产出是独立文件、正文阶段无共享写点（指引与承诺清单只读），天然可并行——
   但只对**互不依赖的节**分派（同素材区间被拆给两节的、后节要浏览前节开头去重的，
@@ -191,7 +194,9 @@ python3 scripts/docx_toolkit.py diagram gantt.png --kind gantt --spec gantt.json
   的红线（建节标题用目录原文名不带编号、占位走批注不进正文、承诺值只取清单、
   依据编号不写进正文）；④每节写完后跑 `--section` 自查并在结果里回传。全局校验
   （第六步）与合册（第七步）**只在主会话做**——承诺对账、节间查重、残留扫描是
-  全局操作，子任务结果收齐后统一执行。节总数少于 5 时不分派，顺序跑更省。
+  全局操作，子任务结果收齐后统一执行；**收尾必须等全部子任务终态返回**（还有
+  子任务在跑就等，不抢跑）；修补任何节文件前先重读该文件——子任务收尾期间可能
+  仍在重建文件，按旧读数的修改会被覆盖。节总数少于 5 时不分派，顺序跑更省。
 
 ## 第六步：全局校验
 

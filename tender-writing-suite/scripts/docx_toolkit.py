@@ -389,11 +389,19 @@ def cmd_create(args) -> None:
                         p.paragraph_format.first_line_indent = Pt(0)
                         for r in p.runs:
                             style_run(r, "黑体", 26 if st == "cover-title" else 15, True)
+                elif st in ("h2", "h3", "h4"):
+                    _ensure_builtin_styles(doc)
+                    st_obj = _get_style(doc, f"Heading {st[1]}")
+                    if st_obj is not None:
+                        p.style = st_obj
+                    p.paragraph_format.first_line_indent = Pt(0)
+                elif st:
+                    die(f"未知 style：{st}（支持 cover-title / cover-sub / h2 / h3 / h4；"
+                        f"节标题走 --title，body 内禁 h1——合册会出双章标题）")
                 else:
                     _set_body_indent(p)
-        doc.add_paragraph("")
-    if args.replace:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # 尾部不补空段：表格引擎已保证表后有段落（防相邻表格互吞），段落结尾
+        # 补空段会在合册分页后顶出空白页（真机实测一册 3 处空白页皆源于此）
     path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(path))
     tag = "已覆盖" if args.replace and path.exists() else "已建节"
@@ -431,7 +439,23 @@ def _content_width_twips(doc: Document) -> int:
     return 8505  # 15cm 兜底
 
 
-def _grid_col_widths(blk: dict, grid_w: int, content_tw: int) -> list[int]:
+def _content_col_weights(hspecs, rspecs, grid_w: int) -> list[int] | None:
+    """无 widths 时的自动列宽权重：各列最长单元格字数（截到 6-50）。
+    合并格（span>1 / vm）不参与——跨列长度无法归属单列。全列无数据返回 None。"""
+    lens = [0] * grid_w
+    for specs in ([hspecs] if hspecs else []) + list(rspecs):
+        pos = 0
+        for text, span, vm in specs:
+            if span == 1 and vm is None and pos < grid_w:
+                lens[pos] = max(lens[pos], len(text.strip()))
+            pos += span
+    if not any(lens):
+        return None
+    return [max(6, min(50, n)) for n in lens]
+
+
+def _grid_col_widths(blk: dict, grid_w: int, content_tw: int,
+                     auto_w: list[int] | None = None) -> list[int]:
     weights = blk.get("widths")
     if weights:
         if len(weights) != grid_w:
@@ -443,6 +467,12 @@ def _grid_col_widths(blk: dict, grid_w: int, content_tw: int) -> list[int]:
             cols = [max(300, int(content_tw * float(x) / wsum)) for x in weights]
             cols[-1] += content_tw - sum(cols)
             return cols
+    if auto_w and len(auto_w) == grid_w and len(set(auto_w)) > 1:
+        # 无 widths：按各列内容长度比例分配（长内容列变宽，评委好读）
+        wsum = sum(auto_w)
+        cols = [max(300, int(content_tw * w / wsum)) for w in auto_w]
+        cols[-1] += content_tw - sum(cols)
+        return cols
     base = max(300, content_tw // grid_w)
     cols = [base] * grid_w
     cols[-1] += content_tw - sum(cols)
@@ -587,7 +617,8 @@ def _emit_table_inner(doc: Document, blk: dict) -> None:
         cp.paragraph_format.first_line_indent = Pt(0)
 
     content_tw = _content_width_twips(doc)
-    col_w = _grid_col_widths(blk, grid_w, content_tw)
+    col_w = _grid_col_widths(blk, grid_w, content_tw,
+                             _content_col_weights(hspecs, rspecs, grid_w))
     size = 10.5 if grid_w <= 6 else (9.5 if grid_w <= 8 else 9.0)
     compact = grid_w >= 9
 
@@ -769,10 +800,28 @@ def cmd_revise(args) -> None:
 
 def cmd_comment(args) -> None:
     doc = Document(args.path)
-    para = _find_para(doc, args.para)
+    if args.cell and args.para:
+        die("--para 与 --cell 只能选一个")
+    if args.cell:
+        m = re.match(r"T(\d+)R(\d+)C(\d+)$", args.cell, re.I)
+        if not m:
+            die(f"--cell 格式应为 T1R2C3：{args.cell}")
+        t, r, c = (int(x) for x in m.groups())
+        tbl = _find_table(doc, t)
+        try:
+            cell = tbl.cell(r - 1, c - 1)
+        except Exception:
+            die(f"格 {args.cell} 越界（该表 {len(tbl.rows)} 行 × {len(tbl.columns)} 列）")
+        para = cell.paragraphs[0]
+        loc = args.cell
+    else:
+        if not args.para:
+            die("--para P# 与 --cell T#R#C# 二选一必填")
+        para = _find_para(doc, args.para)
+        loc = f"P{args.para}"
     cid = add_comment(doc, para, args.text)
     doc.save(args.path)
-    print(f"[已批注] {args.path}（P{args.para}，批注 #{cid}）：{args.text[:50]}")
+    print(f"[已批注] {args.path}（{loc}，批注 #{cid}）：{args.text[:50]}")
 
 
 def _normalized_image(img: Path):
@@ -828,6 +877,19 @@ def cmd_image(args) -> None:
         ratio = 18 / shape.height.cm
         shape.height = Cm(18)
         shape.width = Cm(shape.width.cm * ratio)
+    if args.caption:
+        cap_para = doc.add_paragraph(args.caption)
+        cap_style = _get_style(doc, "Table Caption")
+        if cap_style is not None:
+            cap_para.style = cap_style
+        else:
+            cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for r in cap_para.runs:
+                style_run(r, "宋体", 9, True)
+        cap_para.paragraph_format.first_line_indent = Pt(0)
+        if anchor is not None:
+            para._p.addnext(cap_para._p)  # 题注跟在图段后
+        note += "，题注已加"
     doc.save(args.path)
     print(f"[已插图] {args.path}（{img.name}，全宽居中{note}）")
 
@@ -1523,6 +1585,7 @@ def cmd_assemble(args) -> None:
         _enable_update_fields(master)
         if not _front_section_no_pagenum(master, toc_end, toc_marker):
             _fix_first_page(master)  # 无目录锚点的退化路径：退回 titlePg 方案
+        _shrink_trailing_blank(master)
         out_path = body_dir / out_name
         composer.save(str(out_path))
         print(f"[已合册] {out_path}（合并 {merged} 节，编号 {args.numbering}，"
@@ -1531,6 +1594,41 @@ def cmd_assemble(args) -> None:
             print(f"  ⚠️ {w}")
         warnings = []
         toc_entries = []
+
+
+def _shrink_trailing_blank(master: Document) -> None:
+    """册尾空段压近零：表格结尾时 Word 规范强制保留一个段落，满行高会在内容
+    恰好填满时挤出一张空白尾页（交付观感）。压成 2pt 定行高空段，视觉上消失。"""
+    body = master.element.body
+    for child in reversed(list(body)):
+        if child.tag == qn("w:sectPr"):
+            continue
+        if child.tag != qn("w:p"):
+            return  # 最后一个实体元素不是段落——无册尾空段问题
+        if any((t.text or "").strip() for t in child.findall(".//" + qn("w:t"))):
+            return  # 末段有内容
+        if child.findall(".//" + qn("w:drawing")) or child.findall(".//" + qn("w:commentReference")):
+            return  # 末段带图/批注引用，不动
+        ppr = OxmlElement("w:pPr")  # 整体重建 pPr：spacing→rPr 顺序 schema 安全
+        spacing = OxmlElement("w:spacing")
+        spacing.set(qn("w:before"), "0")
+        spacing.set(qn("w:after"), "0")
+        spacing.set(qn("w:line"), "40")  # 2pt 定值行高
+        spacing.set(qn("w:lineRule"), "exact")
+        ppr.append(spacing)
+        rpr = OxmlElement("w:rPr")
+        sz = OxmlElement("w:sz")
+        sz.set(qn("w:val"), "4")  # 2pt
+        rpr.append(sz)
+        szcs = OxmlElement("w:szCs")
+        szcs.set(qn("w:val"), "4")
+        rpr.append(szcs)
+        ppr.append(rpr)
+        old = child.find(qn("w:pPr"))
+        if old is not None:
+            child.remove(old)
+        child.insert(0, ppr)
+        return
 
 
 def _section_file(body_dir: Path, vol_name: str, title: str, multi: bool) -> Path | None:
@@ -2120,7 +2218,8 @@ def main() -> None:
     sp = sub.add_parser("create", help="建节")
     sp.add_argument("path")
     sp.add_argument("--title", required=True)
-    sp.add_argument("--body", help="body 块序列 JSON 文件（段落/表格混排）")
+    sp.add_argument("--body", help="body 块序列 JSON 文件（段落/表格混排；段落可带 "
+                                   "style: cover-title/cover-sub/h2/h3/h4）")
     sp.add_argument("--template", help="版式模板 docx（缺省用包内基准模板）")
     sp.add_argument("--landscape", action="store_true",
                     help="整节横向页（A4 横版）——宽表节（9 列以上团队/资信表）用")
@@ -2141,9 +2240,10 @@ def main() -> None:
     sp.add_argument("--style", choices=["cover-title", "cover-sub"], help="insert_after 版式")
     sp.set_defaults(func=cmd_revise)
 
-    sp = sub.add_parser("comment", help="加 Word 批注")
+    sp = sub.add_parser("comment", help="加 Word 批注（--para 段落 / --cell 表格格）")
     sp.add_argument("path")
-    sp.add_argument("--para", type=_para_no, required=True)
+    sp.add_argument("--para", type=_para_no, default=None, help="段落号 P#（也接受 3）")
+    sp.add_argument("--cell", help="表格格 T1R2C3（批注落该格首段）")
     sp.add_argument("--text", required=True)
     sp.set_defaults(func=cmd_comment)
 
@@ -2151,6 +2251,7 @@ def main() -> None:
     sp.add_argument("path")
     sp.add_argument("--img", required=True)
     sp.add_argument("--after-para", type=_para_no, default=None)
+    sp.add_argument("--caption", default=None, help="图下题注（居中 9pt，Table Caption 样式）")
     sp.set_defaults(func=cmd_image)
 
     sp = sub.add_parser("render-page", help="PDF 页转 PNG")
