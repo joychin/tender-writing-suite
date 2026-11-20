@@ -2,18 +2,24 @@
 name: tender-writing-suite
 display_name: 灵燕标书写作套件
 display_name_en: Full-Pipeline Bid Writing Suite
-description: "把写标书拆成一条有质量闸门的流水线：招标文件解析 → 要点提取与废标条款全扫 → 目录树规划 → 承诺清单拍板 → 逐节正文（历史标书保真复用、招标格式件原件填空）→ 机器校验（承诺对账、查重、旧名残留清零）→ 自动编号合册。承诺数字不编造，每节来源可追溯，产出可直接递交的整本 Word。"
-description_zh: "从一份招标文件，到一本能直接递交的标书 Word：先扫清废标条款、理出评分点，按得分章法规划目录；逐节写正文，你拍板过的每个承诺数字，机器逐条对账进正文；历史标书里的好段落原样搬来复用。写完自动编号、生成目录页，合册即交。"
-description_en: "End-to-end bid writing: parse the tender, extract requirements, plan the response outline (with 3 cleanup passes), generate per-section Word documents with evidence-tracked material reuse, validate commitments, and assemble a numbered full volume."
+description: "写标书全流程助手：解读招标文件、提取要点与评分办法、废标条款全扫体检、规划投标目录树、逐节撰写商务标技术标正文（历史标书素材保真复用、招标格式件原件填空）、承诺数字机器对账、自动编号合册成书。也支持单轮问答：解析招标文件后直接回答资格门槛、废标风险、评分权重等问题。产出可直接递交的响应文件整本 Word。"
+description_zh: "从一份招标文件，到一本能直接递交的标书 Word：先扫清废标条款、理出评分点，按得分章法规划目录；逐节写正文，你拍板过的每个承诺数字，机器逐条对账进正文；历史标书里的好段落原样搬来复用。写完自动编号、生成目录页，合册即交。不想直接成书也可以只做体检问答：废标风险、资格门槛、评分权重逐条给出处。"
+description_en: "End-to-end bid writing: parse the tender, extract requirements, plan the response outline (with 3 cleanup passes), generate per-section Word documents with evidence-tracked material reuse, validate commitments, and assemble a numbered full volume. Also answers one-shot questions about eligibility thresholds, disqualification risks, and scoring weights with cited line references."
 examples_zh:
   - "解读这份招标文件，提取要点并生成投标目录树"
-  - "梳理废标条款和评分标准，帮我整理成登记表"
+  - "帮我检查这份招标文件有哪些废标风险"
+  - "梳理评分办法和资格门槛，整理成登记表"
   - "按目录写第 3 章，写法参考我上传的历史标书"
+  - "这个项目投标需要准备哪些材料"
+  - "按评分标准帮我规划技术标目录"
 examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
-  - "Review the disqualification clauses and scoring criteria, and organize them into tables"
+  - "Check this tender document for disqualification risks"
+  - "Summarize the scoring method and eligibility thresholds into a checklist"
   - "Write chapter 3 following the outline, referencing my past proposal"
-version: 1.1.9
+  - "What materials do I need to prepare for this bid?"
+  - "Plan the technical proposal outline based on the scoring criteria"
+version: 1.1.10
 author: 灵燕智能
 ---
 
@@ -64,6 +70,18 @@ work/
   body/<节标题>.docx        各节正文（多册：body/<册名>/<节标题>.docx）
   body/整本-<册名>.docx     合册产物
 ```
+
+## 第零步：单轮问答与体检（不进建书流程）
+
+用户只要答案、不要标书时走本步。适用问法：这份招标文件有什么废标风险 /
+资格门槛是什么 / 评分办法帮我梳理 / 这个项目投标要准备哪些材料。流程：解析
+招标文件（同第一步，含来源确认）→ 读 `@references/evidence-rules.md` → 按
+`@references/analysis-lite.md` 出与问题相关的登记表（落 `work/analysis/`，
+只出本题要用的表）→ 据此直接回答，答案逐条带出处引用键。不进建书流程：不做
+目录树、不写正文、不合册；已出的登记表供后续全流程沿用，缺的表届时在第二步
+补齐。回答末尾点明已检查范围，并提示「要生成完整投标文件，回复开始写标书进
+入全流程」。走哪条路从用户问法判断：问答案就先答，要写标书才进完整流程；判
+断不了再问一句。
 
 ## 第一步：解析招标文件
 
