@@ -3,7 +3,7 @@ name: tender-writing-suite
 display_name: 灵燕标书写作套件
 display_name_en: Full-Pipeline Bid Writing Suite
 description: "把写标书拆成一条有质量闸门的流水线：招标文件解析 → 要点提取与废标条款全扫 → 目录树规划 → 承诺清单拍板 → 逐节正文（历史标书保真复用、招标格式件原件填空）→ 机器校验（承诺对账、查重、旧名残留清零）→ 自动编号合册。承诺数字不编造，每节来源可追溯，产出可直接递交的整本 Word。"
-description_zh: "标书写作全流程：招标文件解析、要点提取、目录树规划、写作指引、逐节正文生成（docx 直出）、承诺对账校验、合册整本输出"
+description_zh: "从一份招标文件，到一本能直接递交的标书 Word：先扫清废标条款、理出评分点，按得分章法规划目录；逐节写正文，你拍板过的每个承诺数字，机器逐条对账进正文；历史标书里的好段落原样搬来复用。写完自动编号、生成目录页，合册即交。"
 description_en: "End-to-end bid writing: parse the tender, extract requirements, plan the response outline (with 3 cleanup passes), generate per-section Word documents with evidence-tracked material reuse, validate commitments, and assemble a numbered full volume."
 examples_zh:
   - "解读这份招标文件，提取要点并生成投标目录树"
@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Review the disqualification clauses and scoring criteria, and organize them into tables"
   - "Write chapter 3 following the outline, referencing my past proposal"
-version: 1.1.4
+version: 1.1.5
 author: 灵燕智能
 ---
 
