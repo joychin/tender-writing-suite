@@ -457,11 +457,13 @@ def _col_profiles(hspecs, rspecs, grid_w: int) -> tuple[list[int], list[int]]:
 
 def _label_min_tw(disp_half: int, size: float, content_tw: int) -> int:
     """短标签列（最长内容 ≤8 全角=16 半）保一行放下：字宽×字数+单元格边距。
-    真机教训：按字数给比例、300 dxa 兜底，会把「渲染比对」拆成「渲染比/对」。
-    上限 content_tw//4 防多列标签挤爆版心；长内容列回落 300（允许换行）。"""
-    if disp_half <= 0 or disp_half > 16:
+    真机教训：按字数给比例、300 dxa 兜底，会把「渲染比对」拆成「渲染比/对」；
+    长内容列按 16 半兜底而非 300——孤字窄列（「…初审专/家」）比合理折行更伤。
+    上限 content_tw//4 防多列标签挤爆版心（标签宁可折行不撑破页）。"""
+    if disp_half <= 0:
         return 300
-    return min(disp_half * int(size * 10) + 260, max(300, content_tw // 4))
+    eff = min(disp_half, 16)
+    return min(eff * int(size * 10) + 260, max(300, content_tw // 4))
 
 
 def _fit_widths(cols: list[int], content_tw: int,
@@ -1852,7 +1854,9 @@ def _restyle_all(master: Document, chapters: list, scheme: str) -> None:
     """单遍重排：depth≥2 章标题降一级；节内小标题按树深度降级 + 接续节号 +
     摘出导航大纲（outlineLvl 9，不进目录/导航窗格）。扁平目录（节直接挂册下，
     depth=1）的节内小标题同样编号（10.1 式——chapter 方案的章号是「第十章」
-    汉字形态，前缀须换 counters 的阿拉伯章号拼）。"""
+    汉字形态，前缀须换 counters 的阿拉伯章号拼）。章标题与计划错位（节文件缺
+    失/被删，整本中留空位）时按标题在剩余计划内向后对位，跳过缺章继续接续
+    小标题编号；完全对不上才中断该章的小标题处理。"""
     idx = 0
     cur: tuple[str, int, bool, str] | None = None  # (章号, 树深, 前置区, 阿拉伯章号)
     last_chap = -1
@@ -1863,12 +1867,20 @@ def _restyle_all(master: Document, chapters: list, scheme: str) -> None:
         except Exception:
             sname = ""
         if sname in ("Heading 1", "标题 1"):
+            hit = -1
             if idx < len(chapters) and _chap_match(p.text, chapters[idx][0]):
-                title, depth, num, in_front, arab = chapters[idx]
-                if idx != last_chap:
+                hit = idx
+            else:
+                for j in range(idx + 1, len(chapters)):
+                    if _chap_match(p.text, chapters[j][0]):
+                        hit = j
+                        break
+            if hit >= 0:
+                title, depth, num, in_front, arab = chapters[hit]
+                if hit != last_chap:
                     sub_counters = {}
-                    last_chap = idx
-                idx += 1
+                    last_chap = hit
+                idx = hit + 1
                 cur = (num, depth, in_front, arab)
                 if depth >= 2:
                     try:

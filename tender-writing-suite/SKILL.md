@@ -19,7 +19,7 @@ examples_en:
   - "Write chapter 3 following the outline, referencing my past proposal"
   - "What materials do I need to prepare for this bid?"
   - "Plan the technical proposal outline based on the scoring criteria"
-version: 1.2.2
+version: 1.2.3
 author: 灵燕智能
 ---
 
