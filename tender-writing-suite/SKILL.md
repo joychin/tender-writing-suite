@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Check this tender document for disqualification risks"
   - "What materials do I need to prepare for this bid?"
-version: 2.0.1
+version: 2.0.2
 author: 灵燕智能
 ---
 
