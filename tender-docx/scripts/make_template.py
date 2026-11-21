@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -18,6 +19,11 @@ from docx.shared import Cm  # noqa: E402
 
 
 def main() -> None:
+    # 带参数解析：--help 只看说明不落盘（曾无 argparse，冒烟 --help 也会重建模板，
+    # 每次发版都给 git 造一份内容等价的 docx 元数据差异）
+    argparse.ArgumentParser(
+        description="生成内置基准版式模板 templates/base-template.docx（改版式=改 docx_toolkit setup_styles 后重跑）"
+    ).parse_args()
     doc = Document()
     setup_styles(doc)
     sec = doc.sections[0]
