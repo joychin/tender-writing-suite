@@ -8,7 +8,7 @@
 **已在多份真实标书的完整编写中实战使用——每个版本都由真实项目复盘打磨而来。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](listing/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](listing/CHANGELOG.md)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-informational)
 ![Offline](https://img.shields.io/badge/%E7%BD%91%E7%BB%9C-%E7%BA%AF%E6%9C%AC%E5%9C%B0%E8%BF%90%E8%A1%8C-success)
 
@@ -86,8 +86,10 @@ pip install python-docx pypdfium2 docxcompose Pillow
 
 **2. 装进你的 Agent 环境**
 
-把 [`tender-writing-suite/`](tender-writing-suite/) 整个目录放进所用 Agent 的技能目录
+把五个目录（`tender-writing-suite/`、`tender-analysis/`、`tender-writing/`、
+`tender-review/`、`tender-docx/`）**平级**放进所用 Agent 的技能目录
 （Claude Code / CodeBuddy / WorkBuddy 等支持 Agent Skill 规范的环境均可）。
+五者须平级同装：环节技能之间按平级路径互相引用。
 
 **3. 说一句话开始**
 
@@ -99,24 +101,44 @@ pip install python-docx pypdfium2 docxcompose Pillow
 
 ## 技能包结构
 
+一套五技能，平级安装；入口技能装纪律与路由，环节技能装各自流程，脚本按引擎成组归位：
+
 ```text
-tender-writing-suite/
-├── SKILL.md              # 技能入口：双语元数据 + 全流程编排纪律
-├── references/           # 10 份方法论（解析 / 要点 / 目录 / 证据 / 正文 / 转写 / 版式……）
+tender-writing-suite/          # 入口：红线 7 条 / 确认门 / 技能路由 / 工作目录约定
+├── SKILL.md
+└── references/                # 证据边界 / 阶段门 / 回复口径
+
+tender-analysis/               # 第零步–第三步：解析 / 要点 / 废标 / 目录
+├── SKILL.md
+├── references/                # analysis-lite / transcribe-scans / outline 三件套 / response-files
+├── scripts/parse_document.py  # md + outline.json + meta.json（扫描件栅格化转写；docx 元素映射）
+└── templates/example-outline.md
+
+tender-writing/                # 第四步–第六步：指引 / 逐节 / 全局校验
+├── SKILL.md
+├── references/                # section-writing / guide-format
 ├── scripts/
-│   ├── parse_document.py # 解析：md + outline.json + meta.json（扫描件栅格化转写；docx 另有元素映射）
-│   ├── docx_toolkit.py   # docx 全生命周期：create / revise / comment / image / diagram
-│   │                     #   / render-page / copy-from / assemble / toc-pages
-│   ├── check_writing.py  # 机器校验：指引 / 单节 / 全局承诺比对 + 查重 + 残留扫描
-│   └── make_template.py  # 基准版式模板生成器
-└── templates/            # 基准版式模板 + 示例产物（目录树 / 写作指引 / 承诺清单）
+│   ├── check_writing.py       # 机器校验：指引 / 登记表 / 单节 / 承诺比对 + 查重 + 残留
+│   └── build_dispatch.py      # 并行分派批次提示词拼装
+└── templates/                 # example-guide / example-promise
+
+tender-review/                 # 确认面：报告 / 评审台 / 进度页 / 改动应用
+├── SKILL.md
+├── references/review-workbench.md
+├── scripts/                   # build_review / serve_review / apply_review
+└── templates/                 # 三套页面模板 + example-review-patch
+
+tender-docx/                   # 第七步：合册 / 目录页码 / 回流 / 收尾
+├── SKILL.md
+├── scripts/                   # docx_toolkit / make_template
+└── templates/base-template.docx
 ```
 
 ## 设计原则
 
 - **语义归模型，机械归程序**：解析、表格引擎、章节编号、目录页码、对账校验全部是
   确定性 Python 脚本；模型只做理解、组织与写作，每一步都有程序兜底。
-- **纯本地运行**：三个脚本零网络请求，招标文件与公司素材不出本机。
+- **纯本地运行**：全部脚本零网络请求，招标文件与公司素材不出本机。
 - **正文干净**：占位与待办一律走 Word 批注，交付稿里没有任何占位文字（机器扫描兜底）。
 - **能力边界如实说明**：扫描件（图片型 PDF）走视觉转写通道——解析器栅格化页图，
   由模型逐页誊录（默认页数上限 40，需宿主具备读图能力）；`.doc` 检测到
@@ -127,8 +149,8 @@ tender-writing-suite/
 ## 维护者
 
 - 改动技能包后跑自检：`python3 listing/self_check.py`
-  （frontmatter / YAML 语法 / 字数 / 沿革从句门）
-- 版本号在 `SKILL.md` frontmatter 的 `version` 手工递增，并在
+  （frontmatter / YAML 语法 / 逐技能 token 闸 / 跨技能引用存在性 / 沿革从句门）
+- 版本号在五个 `SKILL.md` frontmatter 的 `version` 同步递增，并在
   [`listing/CHANGELOG.md`](listing/CHANGELOG.md) 追加一行版本史。
 
 ## License

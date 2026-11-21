@@ -32,6 +32,12 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+# 五技能平级安装：共享模块从兄弟技能目录解析（仓库布局与安装布局同构）
+_SUITE_ROOT = Path(__file__).resolve().parent.parent.parent
+_DOCX_SCRIPTS = _SUITE_ROOT / "tender-docx" / "scripts"
+if not _DOCX_SCRIPTS.is_dir():
+    raise SystemExit(f"缺少平级技能 tender-docx（五技能须平级同装）：{_SUITE_ROOT}")
+sys.path.append(str(_DOCX_SCRIPTS))
 from check_writing import _registry_payload, table_rows  # noqa: E402
 from docx_toolkit import build_tree, parse_outline, sanitize_name  # noqa: E402
 
@@ -237,8 +243,9 @@ def build(work: Path, sections_arg: str, out_dir: Path) -> Path:
         "承诺值、素材名片全部在下方：开局禁止 ls/glob 探测目录；禁止检索或使用 "
         "MAND/TPL/REQ/SCORE 内部编号（要求已按原文解析给出，编号不在你的语境）；"
         "无需再读写作指引/关键事实与承诺；直接从第一节开工。〕")
-    blocks.append(f"脚本绝对路径：{SCRIPTS_DIR}（docx_toolkit.py / check_writing.py 在此，"
-                  f"所有命令用绝对路径调用，不假设工作目录）")
+    blocks.append(f"脚本绝对路径：check_writing.py 在 {SCRIPTS_DIR}；"
+                  f"docx_toolkit.py 在 {_DOCX_SCRIPTS}"
+                  f"（所有命令用绝对路径调用，不假设工作目录）")
     blocks.append(f"今天日期：{date.today().isoformat()}（日期只取此行，不自编）")
 
     for i, (key, row, vol) in enumerate(picked, 1):

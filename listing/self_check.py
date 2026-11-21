@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """self_check.py — 技能包上架前结构自检（重发新版时重跑）。
 
-检查：frontmatter 必填字段、name/description 规格上限、SKILL.md 正文 token 规模、
-产品专属词残留、沿革从句、@references 指向的文件存在。
+检查：frontmatter 必填字段、name/description 规格上限、SKILL.md 正文 token 规模
+（逐技能）、产品专属词残留、沿革从句、同技能与跨技能引用指针的文件存在性。
 """
 
 from __future__ import annotations
@@ -26,6 +26,9 @@ FORBIDDEN = [
     "task 工具", "deepagents",
 ]
 CHANGELOG_PHRASES = re.compile(r"此前|不再|原先|旧版|自\s*20\d\d\s*年起|历史上曾")
+# 套件跨技能引用：@<技能名>/references/<文件>.md 与 <技能名>/scripts/<脚本>.py
+CROSS_REF = re.compile(r"@([a-z0-9-]+)/references/([\w.-]+\.md)")
+CROSS_SCRIPT = re.compile(r"([a-z0-9-]+)/scripts/([\w.-]+\.py)")
 
 # SKILL.md 正文 token 闸（官方建议 body < 5000 tokens，见 agentskills.io 规范）。
 # 汉字按 1 token/字数词远低报真实成本（实测约 1.6 token/字），闸门必须按 token 算：
@@ -107,11 +110,17 @@ def check(pkg: Path) -> list[str]:
     for d in ("references", "scripts", "templates"):
         if (pkg / d).is_dir() and not any((pkg / d).iterdir()):
             problems.append(f"{pkg.name}: {d}/ 为空目录")
-    for ref in re.findall(r"@references/([\w.-]+\.md)", body):
-        if not (pkg / "references" / ref).is_file():
-            problems.append(f"{pkg.name}: @references/{ref} 文件不存在")
     for md in list(pkg.rglob("*.md")):
         text = md.read_text(encoding="utf-8")
+        for ref in re.findall(r"@references/([\w.-]+\.md)", text):
+            if not (pkg / "references" / ref).is_file():
+                problems.append(f"{md.relative_to(ROOT)}: 同技能 @references/{ref} 不存在")
+        for skill_name, ref in CROSS_REF.findall(text):
+            if not (ROOT / skill_name / "references" / ref).is_file():
+                problems.append(f"{md.relative_to(ROOT)}: 跨技能 @{skill_name}/references/{ref} 不存在")
+        for skill_name, script in CROSS_SCRIPT.findall(text):
+            if not (ROOT / skill_name / "scripts" / script).is_file():
+                problems.append(f"{md.relative_to(ROOT)}: 跨技能 {skill_name}/scripts/{script} 不存在")
         for w in FORBIDDEN:
             if w in text:
                 first = text.index(w)

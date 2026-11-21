@@ -7,7 +7,7 @@
 所有确认动作（拍板/树与指引编辑）都在页面做，保存后由本地服务直写 work/
 产物——改的就是 agent 后续读的那份 md。
 **对话只做指针**：每道门刷新页面、锚到对应区，对话文本=一行结论+待办去向一句话
-（+至多 3 条标题级提醒），逐条清单不进对话（门锚点矩阵见 @references/stage-gates.md）。
+（+至多 3 条标题级提醒），逐条清单不进对话（门锚点矩阵见 @tender-writing-suite/references/stage-gates.md）。
 
 ## 分析报告页（只读展示产物，分析内容唯一呈现面）
 
@@ -92,9 +92,9 @@ python3 scripts/apply_review.py --patch 改动文件.json --work work   # 助手
 - 服务模式保存 = 页面自动 POST 改动数据 → `apply_review.apply_patch`：基底 sha 校验
   （页面打开后文件被外部改过则拒绝，提示重新生成）→ 写前备份 ×3（`work/review/backup/`）
   → 落盘 → 返回 diff 报告（新增/删除/改名/指引/承诺 + 下游旗标）；
-- **应用成功后必做**：重跑 `python3 scripts/check_writing.py --guide`；把 diff 报告的
+- **应用成功后必做**：重跑 `python3 tender-writing/scripts/check_writing.py --guide`；把 diff 报告的
   「下游注意」逐条向用户点名；被删节点的指引行与节文件清理、新叶子补指引行按提示
-  增量处理（对照 @references/outline-cleanup.md 的增量走查）；**后续任何步骤引用
+  增量处理（对照 @tender-analysis/references/outline-cleanup.md 的增量走查）；**后续任何步骤引用
   目录/指引/承诺前重读对应文件**（页面保存已直写落盘，会话内旧读数作废）；
 - 离线导出的改动文件走 CLI 应用时同样有基底校验与备份；用户没发就继续，不催。
 

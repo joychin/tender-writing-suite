@@ -1,6 +1,6 @@
 # 逐节写作细则（素材先行）
 
-每节一个 .docx，写作与修订全部经 `scripts/docx_toolkit.py`，模型不直接写 docx
+每节一个 .docx，写作与修订全部经 `tender-docx/scripts/docx_toolkit.py`，模型不直接写 docx
 二进制。三种模式的通用前置：动笔前把该节的「依据编号」回 analysis 对应表查出
 要求原文与出处，需要格式原件区段的按出处行号定位。
 
@@ -12,15 +12,15 @@
 ## 工具链速查（docx_toolkit 全参数见脚本 --help）
 
 ```bash
-python3 scripts/docx_toolkit.py create  "<节.docx>" --title "<节标题>" --body body.json   # --landscape 出横版页
-python3 scripts/docx_toolkit.py copy-from <源.docx> "<节.docx>" --lines L120-L260   # 素材/格式件保真拷贝（需已解析）
-python3 scripts/docx_toolkit.py read     "<节.docx>"
-python3 scripts/docx_toolkit.py revise   "<节.docx>" --para P3 --mode replace --find 旧 --text 新
-python3 scripts/docx_toolkit.py revise   "<节.docx>" --cell T1R2C3 --text "填入值"   # 表格格子填空；插行配 --mode insert_after
-python3 scripts/docx_toolkit.py comment  "<节.docx>" --para P5 --text "待办：…"   # 表格格子用 --cell T1R2C3
-python3 scripts/docx_toolkit.py image    "<节.docx>" --img <图片文件> [--after-para P2] [--caption "图3-1 ××说明"]
-python3 scripts/docx_toolkit.py render-page <扫描件.pdf> 3 -o page3.png   # PDF 页转图（证书扫描件贴图用；多页 --pages 3-7）
-python3 scripts/docx_toolkit.py diagram gantt.png --kind gantt --spec gantt.json   # 甘特/分层真图，spec 字段见 --help
+python3 tender-docx/scripts/docx_toolkit.py create  "<节.docx>" --title "<节标题>" --body body.json   # --landscape 出横版页
+python3 tender-docx/scripts/docx_toolkit.py copy-from <源.docx> "<节.docx>" --lines L120-L260   # 素材/格式件保真拷贝（需已解析）
+python3 tender-docx/scripts/docx_toolkit.py read     "<节.docx>"
+python3 tender-docx/scripts/docx_toolkit.py revise   "<节.docx>" --para P3 --mode replace --find 旧 --text 新
+python3 tender-docx/scripts/docx_toolkit.py revise   "<节.docx>" --cell T1R2C3 --text "填入值"   # 表格格子填空；插行配 --mode insert_after
+python3 tender-docx/scripts/docx_toolkit.py comment  "<节.docx>" --para P5 --text "待办：…"   # 表格格子用 --cell T1R2C3
+python3 tender-docx/scripts/docx_toolkit.py image    "<节.docx>" --img <图片文件> [--after-para P2] [--caption "图3-1 ××说明"]
+python3 tender-docx/scripts/docx_toolkit.py render-page <扫描件.pdf> 3 -o page3.png   # PDF 页转图（证书扫描件贴图用；多页 --pages 3-7）
+python3 tender-docx/scripts/docx_toolkit.py diagram gantt.png --kind gantt --spec gantt.json   # 甘特/分层真图，spec 字段见 --help
 ```
 
 （body 块的 style / 合并格 / 列宽写法见下方「推理撰写」。）

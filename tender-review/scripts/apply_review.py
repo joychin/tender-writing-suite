@@ -35,6 +35,13 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+# 五技能平级安装：共享模块从兄弟技能目录解析（仓库布局与安装布局同构）
+_SUITE_ROOT = Path(__file__).resolve().parent.parent.parent
+for _sib in ("tender-writing", "tender-docx"):
+    _sib_scripts = _SUITE_ROOT / _sib / "scripts"
+    if not _sib_scripts.is_dir():
+        raise SystemExit(f"缺少平级技能 {_sib}（五技能须平级同装）：{_SUITE_ROOT}")
+    sys.path.append(str(_sib_scripts))
 from check_writing import (LEGAL_FIGURES, LEGAL_MODES, MATERIAL_TOKEN,
                            _parse_annotations, table_rows)
 from docx_toolkit import build_tree, parse_outline, sanitize_name
@@ -673,7 +680,7 @@ def main() -> None:
         print("下游注意：")
         for f in result["flags"]:
             print(f"- {f}")
-    print("应用后请重跑：python3 scripts/check_writing.py --guide")
+    print(f"应用后请重跑：python3 {_SUITE_ROOT / 'tender-writing' / 'scripts' / 'check_writing.py'} --guide")
 
 
 if __name__ == "__main__":

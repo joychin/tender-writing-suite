@@ -85,15 +85,16 @@ h1{margin:0;font-family:var(--serif);font-size:30px;line-height:1.35;font-weight
 .volrow .track{flex:1;height:4px;background:var(--surface-sunk);border-radius:2px;position:relative;top:-4px}
 .volrow .track i{display:block;height:4px;background:var(--accent);border-radius:2px}
 .volrow .num{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px;flex:none}
-/* 通用表 */
+/* 通用表：定宽列 + 正文列吃剩余；批注正文是主内容，锚定段落单行省略（全文在 title） */
 .tablewrap{overflow-x:auto;margin-top:4px}
 table.t{width:100%;border-collapse:collapse;font-size:13px}
+table.t.fx{table-layout:fixed;min-width:640px}
 .t th{text-align:left;font-weight:400;font-size:11px;letter-spacing:.12em;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border-strong);white-space:nowrap}
-.t td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:baseline}
+.t td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:baseline;overflow-wrap:anywhere}
 .t .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.t .src{font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap}
+.t .src{font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .t .idx{font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:nowrap}
-.t .cat{font-family:var(--serif);font-weight:600;white-space:nowrap}
+.t .cat{font-family:var(--serif);font-weight:600}
 .tag{display:inline-block;font-size:11px;letter-spacing:.04em;border:1px solid var(--border-strong);color:var(--muted);padding:0 5px;line-height:16px;vertical-align:1px;white-space:nowrap}
 .tag.req{color:var(--accent);border-color:var(--accent)}
 .tag.danger{color:var(--danger);border-color:var(--danger)}
@@ -151,7 +152,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}
 
   <section class="sec" id="sec1">
     <div class="sec-head"><h2>一、进度总览</h2><span class="count" id="c1"></span></div>
-    <p class="sec-note">「已写」＝工作目录里已有该节的 Word 文件；批注＝各节正文里的待办批注（待补/待拍板/待确认事项的全量台账在下一节）。</p>
+    <p class="sec-note">「已写」＝工作目录里已有该节的 Word 文件；批注＝各节正文里的待办批注（全量台账在下一节）。不补充也可以继续往下——缺失部分已以 Word 批注标在正文对应位置，随时可补。</p>
     <div class="statgrid" id="stats"></div>
     <div class="volbar" id="volbars"></div>
   </section>
@@ -159,7 +160,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}
   <section class="sec" id="sec2">
     <div class="sec-head"><h2>二、批注台账</h2><span class="count" id="c2"></span></div>
     <p class="sec-note">散落在各节 Word 里的批注全量列出——递交前逐项销号：能补的补、要拍板的找用户、确认不了的原样保留并在收尾汇报点名。批注文本以正文原样为准。</p>
-    <div class="tablewrap"><table class="t" id="cmt-tbl"></table></div>
+    <div class="tablewrap"><table class="t fx" id="cmt-tbl"></table></div>
   </section>
 
   <section class="sec" id="sec3">
@@ -230,7 +231,8 @@ if (DATA.live) document.getElementById("livenote").hidden = false;
   const items = DATA.comments || [];
   document.getElementById("c2").textContent = items.length ? `${items.length} 条` : "";
   if (!items.length) { tbl.outerHTML = `<p class="sec-note" style="margin-top:12px">还没有批注——占位与待办事项随写作进程出现在各节正文里。</p>`; return; }
-  tbl.innerHTML = `<thead><tr><th style="width:26%">所在章节</th><th style="width:42%">批注内容</th><th>锚定段落</th></tr></thead><tbody>` +
+  tbl.innerHTML = `<colgroup><col style="width:22%"><col><col style="width:28%"></colgroup>` +
+    `<thead><tr><th>所在章节</th><th>批注内容</th><th>锚定段落</th></tr></thead><tbody>` +
     items.map(c => `<tr><td class="cat">${esc(c.file)}</td><td>${esc(c.text)}</td><td class="src" title="${esc(c.anchor)}">${esc(c.anchor)}</td></tr>`).join("") +
     `</tbody>`;
 })();

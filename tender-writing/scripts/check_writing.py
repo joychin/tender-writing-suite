@@ -27,6 +27,12 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+# 五技能平级安装：共享模块从兄弟技能目录解析（仓库布局与安装布局同构）
+_SUITE_ROOT = Path(__file__).resolve().parent.parent.parent
+_DOCX_SCRIPTS = _SUITE_ROOT / "tender-docx" / "scripts"
+if not _DOCX_SCRIPTS.is_dir():
+    raise SystemExit(f"缺少平级技能 tender-docx（五技能须平级同装）：{_SUITE_ROOT}")
+sys.path.append(str(_DOCX_SCRIPTS))
 from docx_toolkit import build_tree, iter_blocks, parse_outline, sanitize_name  # noqa: E402
 
 from docx import Document  # noqa: E402

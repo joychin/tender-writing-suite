@@ -27,29 +27,30 @@ body{background:var(--bg);color:var(--fg);font:14px/1.65 var(--sans);-webkit-fon
 a{color:inherit;text-decoration:none}
 .wrap{max-width:1120px;margin:0 auto;padding:0 40px 64px}
 .spacer{flex:1}
-@media (max-width:768px){.wrap{padding:0 16px 48px}.masthead .row{padding:12px 16px}.docno{min-width:0;overflow:hidden;text-overflow:ellipsis}}
-/* 文件头 */
+@media (max-width:768px){.wrap{padding:0 16px 48px}.masthead .row{padding:8px 16px}.docno{min-width:0;overflow:hidden;text-overflow:ellipsis}}
+/* 文件头（压缩版：页头 + 标题区 + 导航合计约 210px） */
 .masthead{border-bottom:1px solid var(--border)}
-.masthead .row{max-width:1120px;margin:0 auto;padding:12px 40px;display:flex;align-items:baseline;gap:16px;font-size:11px;letter-spacing:.08em;color:var(--muted);white-space:nowrap}
+.masthead .row{max-width:1120px;margin:0 auto;padding:8px 40px;display:flex;align-items:baseline;gap:16px;font-size:11px;letter-spacing:.08em;color:var(--muted);white-space:nowrap}
 .lockup{display:flex;align-items:center;gap:8px}
-.logo{width:22px;height:22px;flex:none;color:var(--fg);display:block}
+.logo{width:20px;height:20px;flex:none;color:var(--fg);display:block}
 .brand{font-family:var(--serif);font-size:13px;letter-spacing:.12em;color:var(--fg);white-space:nowrap}
 .docno{font-family:var(--mono);font-size:11px;letter-spacing:.04em}
 /* 标题区 */
-.titleblock{padding:44px 0 28px;border-bottom:3px solid var(--fg);position:relative}
+.titleblock{padding:22px 0 16px;border-bottom:3px solid var(--fg);position:relative}
 .titleblock::after{content:"";position:absolute;left:0;right:0;bottom:-6px;height:1px;background:var(--fg)}
-.kicker{margin:0 0 14px;font-size:11px;letter-spacing:.22em;color:var(--muted)}
-h1{margin:0;font-family:var(--serif);font-size:30px;line-height:1.35;font-weight:600;letter-spacing:.01em;max-width:26em}
-.sub{margin:12px 0 0;font-size:12px;color:var(--muted);letter-spacing:.02em}
+.kicker{margin:0 0 8px;font-size:11px;letter-spacing:.22em;color:var(--muted)}
+h1{margin:0;font-family:var(--serif);font-size:26px;line-height:1.3;font-weight:600;letter-spacing:.01em;max-width:26em}
+.sub{margin:8px 0 0;font-size:12px;color:var(--muted);letter-spacing:.02em}
 .sub .sep{margin:0 8px;color:var(--faint)}
-/* 章节导航 */
-.nav{display:flex;gap:36px;padding:18px 0 0;border-bottom:1px solid var(--border);overflow-x:auto}
-.nav a{padding:0 0 12px;font-size:13px;color:var(--muted);letter-spacing:.02em;white-space:nowrap;flex:none}
+/* 章节导航：吸顶（滚动时固定在视口顶部；≥1440px 由右侧 rail 接管，本导航隐藏） */
+.nav{position:sticky;top:0;z-index:20;display:flex;gap:32px;padding:9px 0 0;border-bottom:1px solid var(--border);background:var(--bg);overflow-x:auto}
+.nav a{padding:0 0 9px;font-size:12.5px;color:var(--muted);letter-spacing:.02em;white-space:nowrap;flex:none}
 .nav a .n{font-family:var(--serif);margin-right:8px;color:var(--faint)}
 .nav a:hover{color:var(--fg)}
-/* 右侧悬浮章节栏：宽屏（≥1440px）接管导航，窄屏保留横向导航，打印全隐 */
-.sec{scroll-margin-top:24px}
+/* 章节锚点补偿：吸顶导航高约 40px，跳转后标题不藏在导航下 */
+.sec{scroll-margin-top:64px}
 @media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+/* 右侧悬浮章节栏：宽屏（≥1440px）接管导航，窄屏保留横向导航，打印全隐 */
 .rail{display:none}
 @media (min-width:1440px){
   .nav{display:none}
@@ -68,13 +69,14 @@ h1{margin:0;font-family:var(--serif);font-size:30px;line-height:1.35;font-weight
 .sec-head .count{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .sec-note{margin:10px 0 0;font-size:12px;color:var(--muted)}
 .coverage{margin:12px 0 0;padding-top:10px;border-top:1px dashed var(--border);font-size:12px;color:var(--faint);line-height:1.7}
-/* 通用表 */
+/* 通用表：定宽列（colgroup 给的宽度）+ 正文列吃剩余；出处列封顶，长串折行不抢宽 */
 .tablewrap{overflow-x:auto;margin-top:4px}
 table.t{width:100%;border-collapse:collapse;font-size:13px}
+table.t.fx{table-layout:fixed;min-width:640px}
 .t th{text-align:left;font-weight:400;font-size:11px;letter-spacing:.12em;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border-strong);white-space:nowrap}
-.t td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:baseline}
+.t td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:baseline;overflow-wrap:anywhere}
 .t .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.t .src{font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap}
+.t .src{font-family:var(--mono);font-size:11.5px;color:var(--faint);line-height:1.5}
 .t .idx{font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:nowrap}
 .t .cat{font-family:var(--serif);font-weight:600;white-space:nowrap}
 .tag{display:inline-block;font-size:11px;letter-spacing:.04em;border:1px solid var(--border-strong);color:var(--muted);padding:0 5px;line-height:16px;vertical-align:1px;white-space:nowrap}
@@ -202,8 +204,10 @@ const stRow = k => ((DATA.structure || {}).rows || []).find(r => r.k === k);
 function coverageHTML(cov) {
   return has(cov) ? `<p class="coverage">覆盖范围：${esc(cov)}</p>` : "";
 }
-function tableHTML(header, rows, cellsHTML) {
-  return `<div class="tablewrap"><table class="t"><thead><tr>${header.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead>` +
+function tableHTML(header, rows, cellsHTML, widths) {
+  const cols = widths && widths.length === header.length
+    ? `<colgroup>${widths.map(w => w ? `<col style="width:${w}">` : "<col>").join("")}</colgroup>` : "";
+  return `<div class="tablewrap"><table class="t${cols ? " fx" : ""}">${cols}<thead><tr>${header.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead>` +
     `<tbody>${rows.map((r, i) => `<tr>${cellsHTML(r, i).map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 function outlineHTML(items) {
@@ -228,7 +232,7 @@ function outlineHTML(items) {
       esc(f.role === "main" ? "主文件" : (f.role || "")),
       `<span class="num">${esc(f.chars ? f.chars + " 字" : "")}${f.pages ? (f.chars ? " / " : "") + f.pages + " 页" : ""}</span>`,
       esc(f.conversion || "") + (f.warnings || []).map(w => `<div style="color:var(--danger);font-size:12px">⚠ ${esc(w)}</div>`).join(""),
-    ]);
+    ], ["auto", "88px", "104px", "22%"]);
   }
   const sb = document.getElementById("stbox");
   const st = DATA.structure;
@@ -266,6 +270,10 @@ function outlineHTML(items) {
     if (!t || !(t.rows || []).length) return "";
     const h = t.header || [];
     const nameI = colOf(h, "名称"), partI = colOf(h, "归属"), extraI = colOf(h, "对应"), srcI = Math.max(colOf(h, "出处"), colOf(h, "线索"));
+    const widths = ["88px", "auto"];
+    if (partI >= 0) widths.push("104px");
+    if (extraI >= 0) widths.push("18%");
+    widths.push("26%");
     return tableHTML(h.map((c, i) => i === 0 ? "编号" : c), t.rows, (r, i) => {
       const at = j => (j >= 0 && j < r.length ? r[j] : "");
       const id = `${idPrefix}-${String(i + 1).padStart(2, "0")}`;
@@ -274,7 +282,7 @@ function outlineHTML(items) {
       if (extraI >= 0) cells.push(esc(at(extraI)));
       cells.push(`<span class="src">${esc(at(srcI))}</span>`);
       return cells;
-    });
+    }, widths);
   };
   html += `<p class="sec-note" style="margin-top:18px">必须提供的章节（${fmt.mand && fmt.mand.rows ? fmt.mand.rows.length : 0} 项）</p>` + regTable(fmt.mand, "req", "MAND");
   html += `<p class="sec-note" style="margin-top:18px">招标方给出的格式模板（${fmt.tpl && fmt.tpl.rows ? fmt.tpl.rows.length : 0} 项）</p>` + regTable(fmt.tpl, "req", "TPL");
@@ -292,7 +300,7 @@ function outlineHTML(items) {
     `<span class="tag req">${esc(r.id)}</span>`,
     `<b>${esc(r.text)}</b>`,
     `<span class="src">${esc(r.src)}</span>`,
-  ]) + coverageHTML(biz.coverage);
+  ], ["88px", "auto", "24%"]) + coverageHTML(biz.coverage);
   document.getElementById("c3").textContent = `${biz.rows.length} 条`;
 })();
 
@@ -310,7 +318,7 @@ function outlineHTML(items) {
       esc(s.points || ""),
       `<span class="src">${esc(r.source || "")}</span>`,
     ];
-  });
+  }, ["104px", "13%", "64px", "auto", "24%"]);
   document.getElementById("c4").textContent = `${sc.length} 项`;
 })();
 

@@ -257,7 +257,8 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
 <!-- 总览 -->
 <section class="panel active" id="panel-overview">
   <div id="ov-banner"></div>
-  <div class="card"><h3>需要你确认的事 <span class="sub">逐条都在本页处理——对话里助手只提醒，不重复清单</span></h3><div id="todos"></div></div>
+  <div class="card"><h3>需要你确认的事 <span class="sub">逐条都在本页处理；不补充也能继续——缺失处会以 Word 批注标注在正文</span></h3><div id="todos"></div></div>
+  <div class="card" id="score-check" hidden><h3>目录体检 <span class="sub">未安排响应章节的评分项——漏排直接丢分；补章节进目录，或在来源标注里补该评分项编号</span></h3><div id="score-check-body"></div></div>
   <div class="card"><h3>招标文件分析报告 <span class="sub">只读快照，可转发可打印——分析内容全量在报告页</span></h3>
     <p class="small muted" id="report-stats" style="margin:0 0 10px">—</p>
     <a class="btn primary" id="report-link" href="招标文件分析报告.html">打开报告页面 →</a>
@@ -976,9 +977,12 @@ function renderGuideDetail() {
     ex.onclick = () => { setGuideField(key, "mode", (getGuideField(key, "mode") ?? (row && row.mode)) === "—" ? "推理撰写" : "—"); renderGuideDetail(); };
     chips.appendChild(ex); how.appendChild(chips);
   } else {
-    const m = (row && row.mode) || "—";
+    /* "—" 是「非正文节点」的机器标记，不能把横杠直接甩给用户 */
+    const parts = ((row && row.mode) || "").split("+").filter(x => x && x !== "—");
     const d = document.createElement("div"); d.className = "kvrow";
-    d.innerHTML = m.split("+").filter(Boolean).map(x => `<span class="chip brand">${esc(x)}</span>`).join(" ") || `<span class="chip">不写正文</span>`;
+    d.innerHTML = parts.length
+      ? parts.map(x => `<span class="chip brand">${esc(x)}</span>`).join(" ")
+      : `<span class="chip">不写正文</span><span class="small muted" style="margin-left:8px">按招标原件填空或贴附件，不走 AI 撰写</span>`;
     how.appendChild(d);
   }
   /* 依据 */
@@ -1242,7 +1246,21 @@ function renderTodos() {
   const unassigned = gRows.length ? (function () { const pre = DATA.volumes.length > 1; let n = 0; for (const [vn, vv] of Object.entries(S.vol)) (function w(ns) { for (const nn of ns) { const key = pre ? vn + "/" + nn.text : nn.text; if (!nn.children.length && !["封面", "目录"].includes(nn.text) && !rowByKey(key) && !DATA.written_keys.includes(key)) n++; w(nn.children); } })(vv.nodes); return n; })() : 0;
   let any = false;
   if (pr.length) { any = true; todo(`${pr.length} 项承诺待你拍板（工期、人员、报价口径等，拍板后写进正文）`, () => switchTab("promise"), "去拍板"); }
-  if (uncov.length) { any = true; todo(`${uncov.length} 个评分项尚未安排响应章节（漏排可能丢分）`, () => window.open(reportHref() + "#sec4", "_blank"), "去查看"); }
+  const chk = document.getElementById("score-check");
+  if (uncov.length) {
+    any = true;
+    chk.hidden = false;
+    const body = document.getElementById("score-check-body"); body.innerHTML = "";
+    for (const s of uncov) {
+      const r = (DATA.registry || {})[s.id] || {};
+      const num = s.id.slice(6).replace(/^0+(?=\d)/, "");
+      const line = document.createElement("div"); line.className = "kvrow small";
+      line.innerHTML = `<span class="badge SCORE" style="cursor:pointer" title="${esc(s.id)} · 点击看招标原文">评分项 ${num}</span><b class="num" style="min-width:44px">${esc(String(s.score))}${/^\d+$/.test(String(s.score)) ? "分" : ""}</b>${esc(s.item)} <span class="mono muted">${esc(r.source || "")}</span>`;
+      line.querySelector(".badge").onclick = () => openTrace(s.id);
+      body.appendChild(line);
+    }
+    todo(`${uncov.length} 个评分项尚未安排响应章节（漏排可能丢分）`, () => { chk.hidden = false; chk.scrollIntoView({ behavior: "smooth", block: "start" }); }, "去查看");
+  } else chk.hidden = true;
   if (unassigned) { any = true; todo(`${unassigned} 个章节还没定写法（写作指引）`, () => switchTab("guide"), "去看"); }
   if (!any) host.innerHTML = `<p class="muted small">当前没有待确认事项。</p>`;
 }

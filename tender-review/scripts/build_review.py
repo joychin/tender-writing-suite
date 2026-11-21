@@ -28,6 +28,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+# 五技能平级安装：共享模块从兄弟技能目录解析（仓库布局与安装布局同构）
+_SUITE_ROOT = Path(__file__).resolve().parent.parent.parent
+for _sib in ("tender-writing", "tender-docx"):
+    _sib_scripts = _SUITE_ROOT / _sib / "scripts"
+    if not _sib_scripts.is_dir():
+        raise SystemExit(f"缺少平级技能 {_sib}（五技能须平级同装）：{_SUITE_ROOT}")
+    sys.path.append(str(_sib_scripts))
 from apply_review import GUIDE_RELPATH, OUTLINE_RELPATH, PROMISE_RELPATH, _sha256, _volumes
 from check_writing import (ID_RE, _parse_annotations, _read, _registry_payload,
                            _resolve_source, _split_tables, table_rows)
@@ -36,7 +43,11 @@ from docx_toolkit import sanitize_name
 TEMPLATE = Path(__file__).parent.parent / "templates" / "review-workbench.html"
 REPORT_TEMPLATE = Path(__file__).parent.parent / "templates" / "analysis-report.html"
 PROGRESS_TEMPLATE = Path(__file__).parent.parent / "templates" / "progress.html"
-VERDICT_RE = re.compile(r"-\s*(CLAR-\d{1,3})\s*::\s*(?:处理|裁决)=([^|]*)\s*(?:\|\s*备注=([^|]*))?(?:\|\s*时间=([^|]*))?")
+# 行首锚定：只认真实记录行，避免把说明文字/示例里的 `- CLAR-01 :: 处理=…` 当成记录；
+# 值一律止于行尾（[^|\n]*），否则「时间=」会跨行吞掉下一条记录
+VERDICT_RE = re.compile(r"^\s*-\s*(CLAR-\d{1,3})\s*::\s*(?:处理|裁决)=([^|\n]*)\s*(?:\|\s*备注=([^|\n]*))?(?:\|\s*时间=([^|\n]*))?", re.M)
+# 占位值（…、...、···）：是格式示例不是用户答复
+VERDICT_PLACEHOLDER_RE = re.compile(r"^[…·．.\s]+$")
 # （ID_RE / _read / _resolve_source / _split_tables / _registry_payload 已下沉
 # check_writing——1.8.0，check_writing 为纯函数落点，依赖方向恒为上游→它）
 
@@ -134,12 +145,20 @@ def _clar_payload(work: Path, decisions: dict) -> dict:
     sec = re.search(r"^##\s*(?:处理|裁决)记录\s*$", text, re.M)
     if sec:
         for m in VERDICT_RE.finditer(text[sec.end():]):
+            verdict = m.group(2).strip()
+            if not verdict or VERDICT_PLACEHOLDER_RE.match(verdict):
+                continue  # 格式示例行（处理=…）不是用户答复，不生成「已处理」
             verdicts[m.group(1).upper()] = {
-                "verdict": m.group(2).strip(), "note": (m.group(3) or "").strip(),
+                "verdict": verdict, "note": (m.group(3) or "").strip(),
                 "at": (m.group(4) or "").strip()}
     for cid, v in (decisions.get("clarifications") or {}).items():
-        verdicts[cid.upper()] = {"verdict": v.get("verdict", ""), "note": v.get("note", ""),
-                                 "at": v.get("at", "")}
+        cid = cid.upper()
+        cur = verdicts.get(cid)
+        cand = {"verdict": v.get("verdict", ""), "note": v.get("note", ""), "at": v.get("at", "")}
+        # 两份台账（处理记录 md / decisions.json）正常情况下同步写入；若分叉，取时间较新的一条
+        if cur and cur.get("at") and cand["at"] and cand["at"] < cur["at"]:
+            continue
+        verdicts[cid] = cand
     return {"items": items, "verdicts": verdicts}
 
 
@@ -556,7 +575,7 @@ def main() -> None:
             print(f"[写作进度已生成] {prog}（写作阶段监视面——第五步首节开写前打开；"
                   f"已写 {t['written']}/{t['total']} 节 · 批注 {t['comments']} 条 · "
                   f"待拍板 {t['pending_promises']} 项；服务模式 /progress.html 自动刷新（数据变化才重载））")
-    print("[停轮提醒] 以 Markdown 链接或文件指引让用户打开页面，本轮停轮等答复"
+    print("[停轮提醒] 以 Markdown 链接或文件指引让用户打开页面，本轮停轮等答复（指针带「需要你补充」表格；固定告知：不补充也可以继续——缺失部分以 Word 批注标注）"
           "（用户已明确授权连续模式除外）。"
           "用户回「继续/先这样」只越过本门等待、推进到下一门产物落盘为止，"
           "下一门交付后照常停轮——门不得同轮连过。")
