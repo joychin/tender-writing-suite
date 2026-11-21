@@ -28,13 +28,21 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-# 五技能平级安装：共享模块从兄弟技能目录解析（仓库布局与安装布局同构）
-_SUITE_ROOT = Path(__file__).resolve().parent.parent.parent
+# 环节间共享模块解析（双形态）：先按五技能平级找 ../<环节>，再按上架单包找
+# ../stages/<环节>（环节收在 stages/ 下的单技能包），都缺才报错
+_STAGE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _sibling_scripts(name: str) -> Path:
+    for cand in (_STAGE_ROOT.parent / name, _STAGE_ROOT.parent / "stages" / name):
+        scripts = cand / "scripts"
+        if scripts.is_dir():
+            return scripts
+    raise SystemExit(f"缺少兄弟环节 {name}（平级与 stages/ 单包形态均未找到）：{_STAGE_ROOT.parent}")
+
+
 for _sib in ("tender-writing", "tender-docx"):
-    _sib_scripts = _SUITE_ROOT / _sib / "scripts"
-    if not _sib_scripts.is_dir():
-        raise SystemExit(f"缺少平级技能 {_sib}（五技能须平级同装）：{_SUITE_ROOT}")
-    sys.path.append(str(_sib_scripts))
+    sys.path.append(str(_sibling_scripts(_sib)))
 from apply_review import GUIDE_RELPATH, OUTLINE_RELPATH, PROMISE_RELPATH, _sha256, _volumes
 from check_writing import (ID_RE, _parse_annotations, _read, _registry_payload,
                            _resolve_source, _split_tables, table_rows)

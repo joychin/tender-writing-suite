@@ -8,7 +8,7 @@
 **已在多份真实标书的完整编写中实战使用——每个版本都由真实项目复盘打磨而来。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](listing/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.1-blue.svg)](listing/CHANGELOG.md)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-informational)
 ![Offline](https://img.shields.io/badge/%E7%BD%91%E7%BB%9C-%E7%BA%AF%E6%9C%AC%E5%9C%B0%E8%BF%90%E8%A1%8C-success)
 
@@ -86,10 +86,15 @@ pip install python-docx pypdfium2 docxcompose Pillow
 
 **2. 装进你的 Agent 环境**
 
-把五个目录（`tender-writing-suite/`、`tender-analysis/`、`tender-writing/`、
-`tender-review/`、`tender-docx/`）**平级**放进所用 Agent 的技能目录
-（Claude Code / CodeBuddy / WorkBuddy 等支持 Agent Skill 规范的环境均可）。
-五者须平级同装：环节技能之间按平级路径互相引用。
+两种形态任选（脚本按「平级 → `stages/`」双路径自动解析兄弟环节）：
+
+- **单包**（上架/分发形态）：把 `tender-writing-suite/` 一个目录放进技能目录即可
+  （四个环节技能已收在包内 `stages/` 下）；
+- **五技能平级**（开发/逐技能安装形态）：把五个目录（`tender-writing-suite/`、
+  `tender-analysis/`、`tender-writing/`、`tender-review/`、`tender-docx/`）平级
+  放进技能目录。
+
+（Claude Code / CodeBuddy / WorkBuddy 等支持 Agent Skill 规范的环境均可。）
 
 **3. 说一句话开始**
 

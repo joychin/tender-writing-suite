@@ -35,13 +35,21 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-# 五技能平级安装：共享模块从兄弟技能目录解析（仓库布局与安装布局同构）
-_SUITE_ROOT = Path(__file__).resolve().parent.parent.parent
+# 环节间共享模块解析（双形态）：先按五技能平级找 ../<环节>，再按上架单包找
+# ../stages/<环节>（环节收在 stages/ 下的单技能包），都缺才报错
+_STAGE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _sibling_scripts(name: str) -> Path:
+    for cand in (_STAGE_ROOT.parent / name, _STAGE_ROOT.parent / "stages" / name):
+        scripts = cand / "scripts"
+        if scripts.is_dir():
+            return scripts
+    raise SystemExit(f"缺少兄弟环节 {name}（平级与 stages/ 单包形态均未找到）：{_STAGE_ROOT.parent}")
+
+
 for _sib in ("tender-writing", "tender-docx"):
-    _sib_scripts = _SUITE_ROOT / _sib / "scripts"
-    if not _sib_scripts.is_dir():
-        raise SystemExit(f"缺少平级技能 {_sib}（五技能须平级同装）：{_SUITE_ROOT}")
-    sys.path.append(str(_sib_scripts))
+    sys.path.append(str(_sibling_scripts(_sib)))
 from check_writing import (LEGAL_FIGURES, LEGAL_MODES, MATERIAL_TOKEN,
                            _parse_annotations, table_rows)
 from docx_toolkit import build_tree, parse_outline, sanitize_name
@@ -680,7 +688,7 @@ def main() -> None:
         print("下游注意：")
         for f in result["flags"]:
             print(f"- {f}")
-    print(f"应用后请重跑：python3 {_SUITE_ROOT / 'tender-writing' / 'scripts' / 'check_writing.py'} --guide")
+    print(f"应用后请重跑：python3 {_sibling_scripts('tender-writing') / 'check_writing.py'} --guide")
 
 
 if __name__ == "__main__":

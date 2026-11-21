@@ -32,11 +32,20 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-# 五技能平级安装：共享模块从兄弟技能目录解析（仓库布局与安装布局同构）
-_SUITE_ROOT = Path(__file__).resolve().parent.parent.parent
-_DOCX_SCRIPTS = _SUITE_ROOT / "tender-docx" / "scripts"
-if not _DOCX_SCRIPTS.is_dir():
-    raise SystemExit(f"缺少平级技能 tender-docx（五技能须平级同装）：{_SUITE_ROOT}")
+# 环节间共享模块解析（双形态）：先按五技能平级找 ../<环节>，再按上架单包找
+# ../stages/<环节>（环节收在 stages/ 下的单技能包），都缺才报错
+_STAGE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _sibling_scripts(name: str) -> Path:
+    for cand in (_STAGE_ROOT.parent / name, _STAGE_ROOT.parent / "stages" / name):
+        scripts = cand / "scripts"
+        if scripts.is_dir():
+            return scripts
+    raise SystemExit(f"缺少兄弟环节 {name}（平级与 stages/ 单包形态均未找到）：{_STAGE_ROOT.parent}")
+
+
+_DOCX_SCRIPTS = _sibling_scripts("tender-docx")
 sys.path.append(str(_DOCX_SCRIPTS))
 from check_writing import _registry_payload, table_rows  # noqa: E402
 from docx_toolkit import build_tree, parse_outline, sanitize_name  # noqa: E402

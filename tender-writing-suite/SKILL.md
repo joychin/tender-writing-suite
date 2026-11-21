@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Check this tender document for disqualification risks"
   - "What materials do I need to prepare for this bid?"
-version: 2.0.0
+version: 2.0.1
 author: 灵燕智能
 ---
 
@@ -24,7 +24,8 @@ author: 灵燕智能
 先载入该步点名的技能，再按那个技能的 SKILL.md 执行。
 
 套件构成：本技能（入口）、tender-analysis（解析分析）、tender-writing（写作）、
-tender-review（评审台）、tender-docx（合册交付）——五者平级安装。
+tender-review（评审台）、tender-docx（合册交付）——发布为单包（环节在包内
+`stages/` 下）或五技能平级两种形态安装。
 
 ## 红线（置顶：长会话压缩只保留文件开头）
 
@@ -73,15 +74,21 @@ tender-review（评审台）、tender-docx（合册交付）——五者平级�
 
 ## 跨技能路径约定
 
-五技能平级安装在技能根（本技能目录的上一级）。套件内引用一律以安装根为基准：
+套件有两种安装形态，环节间引用一律以**安装根**为基准：
+
+- **五技能平级形态**（多技能环境逐个安装）：安装根＝本技能目录的上一级；
+- **单包形态**（上架与一次导入）：环节收在本包 `stages/` 下，安装根＝本技能目录
+  本身（`tender-writing-suite` 即本包），环节路径带 `stages/` 前缀，「载入某环节」
+  ＝读 `stages/<环节>/SKILL.md` 并按其执行。
 
 - 脚本：`<技能名>/scripts/<脚本>.py`（如 `tender-review/scripts/build_review.py`）；
 - 细则：`@<技能名>/references/<文件>.md`（如 `@tender-writing-suite/references/stage-gates.md`）；
 - 同技能内可简写 `scripts/…`、`@references/…`。
 
-**脚本不在工作目录**：命令示例里的相对路径以安装根为基准，执行前按「本技能目录的
-上一级 + 相对路径」解析成绝对路径（宿主技能目录变量如 `CODEBUDDY_SKILL_DIR` /
-`CLAUDE_PLUGIN_ROOT` 可直接定位本技能）；工作目录只放 `work/` 产物。
+**脚本不在工作目录**：命令示例里的相对路径以安装根为基准，执行前解析成绝对路径
+（宿主技能目录变量如 `CODEBUDDY_SKILL_DIR` / `CLAUDE_PLUGIN_ROOT` 可直接定位本
+技能，单包形态安装根即本技能目录）；工作目录只放 `work/` 产物。脚本自身按
+「平级 → `stages/`」双路径解析兄弟环节，两种形态都无需改配置。
 
 ## 门行为速记
 
