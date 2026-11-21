@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="zh-CN" data-zcode-design>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>标书评审台 · 方向C 控制台风</title>
+<style>
+/* ===== 方向C：控制台风 =====
+   深色壳、等高行、等宽数字。把评审当成一条需要盯住的流水线：
+   先看指标，再看队列，最后看明细。 */
+:root{
+  --bg:#0D1117; --surface:#151B23; --raised:#1A222C; --sunk:#111720;
+  --fg:#E6EAF0; --muted:#93A0AE; --faint:#6B7785;
+  --border:#FFFFFF14; --border-strong:#FFFFFF2A;
+  --accent:#4FD1C5; --accent-ink:#04211F; --accent-soft:#4FD1C514;
+  --danger:#F87171; --danger-soft:#F8717114;
+  --warn:#FBBF24; --warn-soft:#FBBF2412;
+  --ok:#4ADE80; --ok-soft:#4ADE8012;
+  --hover:#212B36; --hover-line:#FFFFFF3D; --accent-hover:#6FE0D5;
+  --accent-line:#4FD1C540; --warn-line:#FBBF2440; --danger-line:#F8717133; --row-hover:#FFFFFF05;
+  --ok-glow:#4ADE8014; --warn-glow:#FBBF2414;
+  --r:4px;
+  --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --motion:.14s ease;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:13px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+:where(a,button,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms !important}}
+.num,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.spacer{flex:1}
+
+/* 顶部导轨 */
+.rail{background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20}
+.rail .in{max-width:1360px;margin:0 auto;padding:0 24px;height:48px;display:flex;align-items:center;gap:14px}
+.mark{width:18px;height:18px;border:1px solid var(--border-strong);display:grid;place-items:center;flex:none;font-size:10px;font-weight:600;line-height:1}
+.brand{font-size:13px;font-weight:600;letter-spacing:.04em}
+.proj{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:36vw}
+.proj::before{content:"/";margin-right:12px;color:var(--faint)}
+.indic{display:inline-flex;align-items:center;gap:7px;font-size:11px;letter-spacing:.06em;color:var(--muted)}
+.indic .led{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--ok-glow)}
+.indic.warn .led{background:var(--warn);box-shadow:0 0 0 3px var(--warn-glow)}
+
+/* 分段导航 */
+.seg{background:var(--surface);border-bottom:1px solid var(--border)}
+.seg .in{max-width:1360px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:24px;height:44px}
+.seg nav{display:flex;gap:2px}
+.seg a{padding:0 12px;height:44px;display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);border-bottom:2px solid transparent;letter-spacing:.02em;white-space:nowrap}
+.seg a:hover{color:var(--fg)}
+.seg a.on{color:var(--accent);border-bottom-color:var(--accent);background:var(--accent-soft)}
+.seg .cnt{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+.seg a.on .cnt{color:var(--accent)}
+.seg .right{display:flex;gap:8px;align-items:center}
+.btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border:1px solid var(--border-strong);border-radius:var(--r);background:var(--raised);font-size:12px;transition:background-color var(--motion),border-color var(--motion)}
+.btn:hover{background:var(--hover);border-color:var(--hover-line)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+
+/* 版心 */
+.page{max-width:1360px;margin:0 auto;padding:20px 24px 40px}
+
+/* 指标条 */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:var(--r);background:var(--surface);margin-bottom:16px}
+.metric{padding:14px 18px;border-left:1px solid var(--border)}
+.metric:first-child{border-left:none}
+.metric .k{font-size:10.5px;letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
+.metric .v{font-family:var(--mono);font-size:26px;line-height:1.2;letter-spacing:-.02em;margin-top:6px;font-variant-numeric:tabular-nums}
+.metric .v small{font-size:12px;color:var(--muted);letter-spacing:0;margin-left:3px}
+.metric .d{font-size:11px;color:var(--faint);margin-top:2px}
+.metric.danger .v{color:var(--danger)}
+.metric.ok .v{color:var(--ok)}
+
+/* 网格 */
+.grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,1fr);gap:16px;align-items:start}
+.panel{border:1px solid var(--border);border-radius:var(--r);background:var(--surface)}
+.panel + .panel{margin-top:16px}
+.panel-h{display:flex;align-items:center;gap:10px;height:40px;padding:0 14px;border-bottom:1px solid var(--border)}
+.panel-h h2{margin:0;font-size:12px;font-weight:600;letter-spacing:.06em}
+.panel-h .n{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.panel-h .link{margin-left:auto;font-size:11px;color:var(--muted)}
+.panel-h .link:hover{color:var(--fg)}
+.panel-b{padding:6px 14px 12px}
+
+/* 队列 */
+.qrow{display:grid;grid-template-columns:50px 1fr auto;gap:12px;align-items:start;padding:12px 0;border-top:1px solid var(--border)}
+.qrow:first-child{border-top:none}
+.qid{font-family:var(--mono);font-size:11px;color:var(--faint);padding-top:2px}
+.qt{font-size:13px;font-weight:500}
+.qd{margin-top:3px;font-size:12px;color:var(--muted);max-width:62ch}
+.qact{align-self:center;font-family:var(--mono);font-size:11px;color:var(--accent);border:1px solid var(--accent-line);padding:2px 8px;border-radius:2px;white-space:nowrap}
+.qact:hover{background:var(--accent-soft);border-color:var(--accent)}
+.tag{display:inline-block;font-size:10.5px;line-height:16px;padding:0 5px;border-radius:2px;letter-spacing:.04em;white-space:nowrap;margin-left:8px}
+.tag.warn{color:var(--warn);background:var(--warn-soft);border:1px solid var(--warn-line)}
+.tag.bad{color:var(--danger);background:var(--danger-soft);border:1px solid var(--danger-line)}
+
+/* 表 */
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.tbl th{text-align:left;font-weight:500;font-size:10.5px;letter-spacing:.1em;color:var(--muted);padding:8px 8px;border-bottom:1px solid var(--border-strong);text-transform:uppercase;white-space:nowrap}
+.tbl td{padding:9px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:var(--row-hover)}
+.tbl .right{text-align:right}
+.tbl .cat{font-weight:600;white-space:nowrap}
+.tbl tr.sub .cat{font-weight:400;color:var(--muted);padding-left:18px}
+.tbl .val{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.tbl tr.gap td{background:var(--danger-soft)}
+.tbl .miss{color:var(--danger)}
+.st{font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;white-space:nowrap}
+.st::before{content:"";display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--ok);margin-right:7px;vertical-align:1px}
+.st.bad{color:var(--danger)}
+.st.bad::before{background:var(--danger)}
+.st.mute{color:var(--faint)}
+.st.mute::before{background:var(--faint)}
+
+/* 右栏：告警 */
+.alert{display:grid;grid-template-columns:3px 1fr auto;gap:10px;padding:10px 0;border-top:1px solid var(--border);align-items:start}
+.alert:first-child{border-top:none}
+.alert .bar{width:3px;align-self:stretch;background:var(--danger);border-radius:1px}
+.alert .q{font-size:12.5px;font-weight:500}
+.alert .s{font-size:11px;color:var(--muted);margin-top:2px}
+.alert .out{font-family:var(--mono);font-size:10.5px;color:var(--danger);white-space:nowrap;align-self:center}
+
+/* 进度 */
+.gauge{padding:4px 0 2px}
+.gauge .line{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:7px}
+.gauge .track{display:flex;height:6px;background:var(--sunk);border-radius:1px;overflow:hidden;border:1px solid var(--border)}
+.gauge .fill{background:var(--fg)}
+.gauge .gap{background:var(--danger)}
+.gauge .legend{display:flex;gap:14px;font-size:10.5px;color:var(--faint);margin-top:7px;font-family:var(--mono)}
+
+/* 树 */
+.tree .row{display:grid;grid-template-columns:52px 1fr auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--border);font-size:12.5px}
+.tree .row:first-child{border-top:none}
+.tree .no{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+.tree .row.lv2{padding-left:14px;border-left:1px solid var(--border)}
+.tree .row.missing .nm{color:var(--muted)}
+.tree .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;padding:0 4px;border:1px solid var(--border-strong);border-radius:2px;color:var(--muted);white-space:nowrap}
+.tree .chip.req{color:var(--accent);border-color:var(--accent-line)}
+.tree .chip.score{color:var(--warn);border-color:var(--warn-line)}
+
+/* 承诺 */
+.prow{display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:8px 0;border-top:1px solid var(--border);font-size:12.5px;align-items:baseline}
+.prow:first-child{border-top:none}
+.prow .k{color:var(--muted)}
+.prow .v{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.prow .s{font-family:var(--mono);font-size:10.5px;color:var(--ok)}
+.prow .s.wait{color:var(--warn)}
+
+.foot{max-width:1360px;margin:0 auto;padding:6px 24px 32px;display:flex;font-size:10.5px;color:var(--faint);font-family:var(--mono)}
+
+@media (max-width:1024px){
+  .grid{grid-template-columns:1fr}
+  .metrics{grid-template-columns:repeat(2,1fr)}
+  .metric:nth-child(3){border-left:none}
+  .metric:nth-child(n+3){border-top:1px solid var(--border)}
+}
+@media (max-width:640px){
+  .rail .in,.seg .in,.page,.foot{padding-left:16px;padding-right:16px}
+  .proj{display:none}
+  .seg .right{display:none}
+  .seg nav{overflow-x:auto;flex:1;min-width:0;gap:0}
+  .seg .in{gap:0}
+  .seg a{padding:0 9px;font-size:11.5px}
+  .indic{display:none}
+  .metrics{grid-template-columns:1fr 1fr}
+  .qrow{grid-template-columns:1fr auto}
+  .qid{display:none}
+}
+</style>
+</head>
+<body>
+
+<header class="rail">
+  <div class="in">
+    <span class="mark" aria-hidden="true">灵</span>
+    <span class="brand">标书评审台</span>
+    <span class="proj">某某市人民医院智慧医院信息化建设采购项目</span>
+    <span class="spacer"></span>
+    <span class="indic"><span class="led"></span>在线 · 11:45</span>
+    <span class="indic">竞争性磋商 · 36,252 字</span>
+  </div>
+</header>
+
+<div class="seg">
+  <div class="in">
+    <nav aria-label="评审分区">
+      <a href="#" class="on">总览<span class="cnt">03</span></a>
+      <a href="#">目录树<span class="cnt">46</span></a>
+      <a href="#">写作指引<span class="cnt">12</span></a>
+      <a href="#">承诺清单<span class="cnt">08</span></a>
+    </nav>
+    <span class="spacer"></span>
+    <div class="right">
+      <button class="btn">查看原文</button>
+      <button class="btn primary">处理待确认 3</button>
+    </div>
+  </div>
+</div>
+
+<main class="page">
+
+  <div class="metrics">
+    <div class="metric danger">
+      <div class="k">待确认</div>
+      <div class="v">3</div>
+      <div class="d">澄清 2 · 承诺 1</div>
+    </div>
+    <div class="metric">
+      <div class="k">评分覆盖</div>
+      <div class="v">78<small>%</small></div>
+      <div class="d">35 / 45 分已安排章节</div>
+    </div>
+    <div class="metric danger">
+      <div class="k">废标条款</div>
+      <div class="v">2</div>
+      <div class="d">均为响应无效</div>
+    </div>
+    <div class="metric ok">
+      <div class="k">目录章节</div>
+      <div class="v">46</div>
+      <div class="d">已写 0 · 待写 46</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <section class="panel">
+        <div class="panel-h"><h2>待确认队列</h2><span class="n">03</span><a class="link" href="#">全部处理完再进入写作</a></div>
+        <div class="panel-b">
+          <div class="qrow">
+            <span class="qid">T-01</span>
+            <div>
+              <div class="qt">澄清问题 2 条待裁决<span class="tag warn">需书面</span></div>
+              <div class="qd">「付款方式」与合同专用条款口径不一致；磋商保证金金额未载明。</div>
+            </div>
+            <button class="qact">查看原文</button>
+          </div>
+          <div class="qrow">
+            <span class="qid">T-02</span>
+            <div>
+              <div class="qt">项目团队人数待拍板</div>
+              <div class="qd">评分要求团队不少于 6 人；未拍板前正文不写入任何人数。</div>
+            </div>
+            <button class="qact">去拍板</button>
+          </div>
+          <div class="qrow">
+            <span class="qid">T-03</span>
+            <div>
+              <div class="qt">数据治理方案 10 分无响应章节<span class="tag bad">丢分</span></div>
+              <div class="qd">目录树中不存在对应节点，合册前不补将直接失分。</div>
+            </div>
+            <button class="qact">去安排</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-h"><h2>评分办法</h2><span class="n">90 / 100</span><a class="link" href="#">对照原文</a></div>
+        <div class="panel-b" style="padding-bottom:6px">
+          <table class="tbl">
+            <thead><tr><th>评分项</th><th class="right">分值</th><th>响应章节</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td class="cat">商务分</td><td class="val">30</td><td>第一章 商务响应</td><td><span class="st">已安排</span></td></tr>
+              <tr class="sub"><td class="cat">总体技术方案</td><td class="val">15</td><td>2.1 总体技术方案</td><td><span class="st">已安排</span></td></tr>
+              <tr class="gap"><td class="cat" style="padding-left:18px">数据治理方案</td><td class="val">10</td><td class="miss">尚未安排</td><td><span class="st bad">缺口</span></td></tr>
+              <tr class="sub"><td class="cat">实施与运维方案</td><td class="val">20</td><td>2.3 实施与运维方案</td><td><span class="st">已安排</span></td></tr>
+              <tr><td class="cat">价格分</td><td class="val">25</td><td>第一章 商务响应 · 报价表</td><td><span class="st">已安排</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <aside>
+      <section class="panel">
+        <div class="panel-h"><h2>废标告警</h2><span class="n">02</span><a class="link" href="#">全部</a></div>
+        <div class="panel-b">
+          <div class="alert">
+            <span class="bar"></span>
+            <div><div class="q">未按要求提交磋商保证金</div><div class="s">供应商须知 2.4</div></div>
+            <span class="out">响应无效</span>
+          </div>
+          <div class="alert">
+            <span class="bar"></span>
+            <div><div class="q">技术方案未逐条响应带★条款</div><div class="s">评审办法 3.1</div></div>
+            <span class="out">响应无效</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-h"><h2>目录预览</h2><a class="link" href="#">打开目录树</a></div>
+        <div class="panel-b">
+          <div class="tree">
+            <div class="row"><span class="no">第二章</span><span class="nm">技术方案</span><span class="chip req">REQ</span></div>
+            <div class="row lv2"><span class="no">2.1</span><span class="nm">总体技术方案</span><span class="chip req">REQ</span></div>
+            <div class="row lv2 missing"><span class="no">2.2</span><span class="nm">数据治理方案（未建）</span><span class="chip score">SCORE 10</span></div>
+            <div class="row lv2"><span class="no">2.3</span><span class="nm">实施与运维方案</span><span class="chip req">REQ</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-h"><h2>关键承诺</h2><a class="link" href="#">去拍板</a></div>
+        <div class="panel-b">
+          <div class="prow"><span class="k">项目团队人数</span><span class="v">8 人</span><span class="s wait">待拍板</span></div>
+          <div class="prow"><span class="k">总工期</span><span class="v">90 天</span><span class="s">已确认</span></div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <footer class="foot">
+    <span>DEMO DATA · 仅用于视觉方向比较，非真实项目数据</span>
+    <span class="spacer"></span>
+    <span>方向 C · 控制台风</span>
+  </footer>
+
+</main>
+</body>
+</html>

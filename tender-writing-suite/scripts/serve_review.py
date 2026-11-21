@@ -2,9 +2,14 @@
 """serve_review.py — 评审台本地服务（环回 + token 路径，页面保存直写 work/ 产物）。
 
 路由（全部挂在 /<token>/ 前缀下，无 token 一律 404）：
-- GET  /<token>/          评审台页面（每次请求实时注入最新产物与草稿状态）
-- GET  /<token>/healthz   心跳探活（页面 5s 一次；agent --status 探活）
-- POST /<token>/apply     应用修改包（apply_review.apply_patch，含基底校验与备份）
+- GET  /<token>/          评审台页面（每次请求实时注入最新产物、草稿状态与产物指纹；
+                           评审台.html 为同一页面的别名——分析报告页脚回链走相对路径用）
+- GET  /<token>/report.html  分析报告页（实时渲染；报告.html 为别名；评审台总览的「打开报告页面」入口指向这里）
+- GET  /<token>/progress.html  写作进度面板（实时渲染+指纹门控自刷新；进度.html 为别名；写作阶段监视面）
+- GET  /<token>/healthz   心跳探活+产物指纹（评审台 5s 一次比对出「材料已更新」提示；
+                           进度面板 30s 一次驱动门控自刷新；agent --status 探活）
+- POST /<token>/apply     应用修改包（apply_review.apply_patch，含基底校验与备份；
+                           回包带应用后的新指纹，页面基线同步、不把自己的保存误报成外部更新）
 - POST /<token>/draft     草稿暂存（防页面丢失编辑；{} = 清除）
 - GET  /<token>/context   解析原文上下文切片（限 work/parse/ 内文件，防路径穿越）
 
@@ -97,6 +102,15 @@ def make_handler(work: Path, token: str, state: dict):
         def _reject(self, code: int, msg: str) -> None:
             self._json({"ok": False, "error": msg}, code)
 
+        def _html(self, html: str) -> None:
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
         def _same_origin(self) -> bool:
             o = self.headers.get("Origin") or self.headers.get("Referer") or ""
             if not o:
@@ -126,27 +140,47 @@ def make_handler(work: Path, token: str, state: dict):
             return self.rfile.read(int(self.headers.get("Content-Length") or 0))
 
         def do_GET(self):
+            # 浏览器向源站根路径要 /favicon.ico（不带 token 前缀）——在守卫前静默
+            # 应答 204，否则 console 会记一条 404 噪声
+            if urllib.parse.urlsplit(self.path).path.endswith("/favicon.ico"):
+                self.send_response(204)
+                self.end_headers()
+                return
             if not self._guard(False):
                 return
-            path = self.path[len(prefix):].split("?")[0].lstrip("/")
+            # 报告页脚回链用的是相对路径「评审台.html」，URL 里以百分号编码到达，先解码再比对
+            path = urllib.parse.unquote(self.path[len(prefix):].split("?")[0].lstrip("/"))
             qs = {k: v[0] for k, v in urllib.parse.parse_qs(self.path.split("?", 1)[-1]).items()} if "?" in self.path else {}
-            if path in ("", "index.html"):
+            if path in ("", "index.html", "评审台.html"):
                 try:
                     payload = build_review.collect_payload(work)
                     draft = _read_json(work / DRAFT_FILE)
                     payload["draft"] = draft if draft else None
-                    html = build_review.render_html(payload, api_base=prefix).encode("utf-8")
+                    payload["fp"] = build_review.fingerprint(work)
+                    html = build_review.render_html(payload, api_base=prefix)
                 except Exception as exc:
                     self._json({"ok": False, "error": f"产物读取失败：{exc}"}, 500)
                     return
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(html)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(html)
+                self._html(html)
+            elif path in ("report.html", "招标文件分析报告.html"):
+                try:
+                    html = build_review.render_report(build_review.collect_payload(work), workbench=True)
+                except Exception as exc:
+                    self._json({"ok": False, "error": f"产物读取失败：{exc}"}, 500)
+                    return
+                self._html(html)
+            elif path in ("progress.html", "写作进度.html"):
+                try:
+                    pp = build_review.progress_payload(work)
+                    pp["fp"] = build_review.fingerprint(work)
+                    html = build_review.render_progress(pp, live=True)
+                except Exception as exc:
+                    self._json({"ok": False, "error": f"产物读取失败：{exc}"}, 500)
+                    return
+                self._html(html)
             elif path == "healthz":
-                self._json({"ok": True, "work": str(work), "started": state["started"]})
+                self._json({"ok": True, "work": str(work), "started": state["started"],
+                            "fp": build_review.fingerprint(work)})
             elif path == "context":
                 fname = qs.get("file", "")
                 try:
@@ -182,6 +216,7 @@ def make_handler(work: Path, token: str, state: dict):
                     return
                 if result.get("ok"):
                     (work / DRAFT_FILE).unlink(missing_ok=True)  # 应用成功，待存草稿已过时
+                    result["fp"] = build_review.fingerprint(work)  # 新基线：防页面把自己的保存误报成外部更新
                 self._json(result, 200 if result.get("ok") else 409 if result.get("stage") == "base" else 400)
             elif path == "draft":
                 try:
@@ -201,11 +236,13 @@ def make_handler(work: Path, token: str, state: dict):
 
 
 def start(work: Path, idle_timeout: int) -> tuple[str, bool, object]:
-    """启动（或复用）服务；返回 (URL, 是否新起, 服务线程)。"""
+    """启动（或复用）服务；返回 (URL, 是否新起, 服务线程)。
+    复用仅限同一工作目录（serve.json 记 work 比对）——复制工作区会把旧
+    serve.json 一起带走，误复用会让两个目录指向同一个服务（实测踩坑）。"""
     work = work.resolve()
     spath = work / SERVE_FILE
     old = _read_json(spath) if spath.is_file() else None
-    if old:
+    if old and old.get("work") == str(work):
         base = f"http://127.0.0.1:{old['port']}/{old['token']}/"
         if _pid_alive(old.get("pid", 0)) and probe(base):
             return base, False, None
@@ -241,8 +278,10 @@ def idle_watchdog(srv: ThreadingHTTPServer, state: dict, idle_timeout: int, spat
 
 
 def do_status(work: Path) -> int:
+    work = work.resolve()
     old = _read_json(work / SERVE_FILE) if (work / SERVE_FILE).is_file() else None
-    if old and _pid_alive(old.get("pid", 0)) and probe(f"http://127.0.0.1:{old['port']}/{old['token']}/"):
+    if old and old.get("work") == str(work) \
+            and _pid_alive(old.get("pid", 0)) and probe(f"http://127.0.0.1:{old['port']}/{old['token']}/"):
         print(f"[评审台服务运行中] http://127.0.0.1:{old['port']}/{old['token']}/")
         return 0
     (work / SERVE_FILE).unlink(missing_ok=True)
@@ -251,9 +290,11 @@ def do_status(work: Path) -> int:
 
 
 def do_stop(work: Path) -> int:
+    work = work.resolve()
     old = _read_json(work / SERVE_FILE) if (work / SERVE_FILE).is_file() else None
-    if not old:
+    if not old or old.get("work") != str(work):
         print("[评审台服务未运行]")
+        (work / SERVE_FILE).unlink(missing_ok=True)
         return 0
     pid = old.get("pid", 0)
     if _pid_alive(pid):
@@ -290,6 +331,12 @@ def main() -> None:
     print(f"[评审台服务{'已启动' if fresh else '复用中'}] {url}", flush=True)
     print(f"工作目录：{work.resolve()}", flush=True)
     print("空闲超时自动退出（--idle-timeout 0 关闭）；收尾时用 --stop 停止。", flush=True)
+    print("[停轮提醒] 起台≠门已过：把上面的 URL 以 Markdown 链接（[打开评审页面](URL)）"
+          "发给用户并停轮等答复——链接之后本轮不得再发起推进动作"
+          "（用户已明确授权连续模式除外）。"
+          "用户回「继续/先这样」只越过本门等待、按默认方案推进到下一门产物落盘为止，"
+          "下一门交付后照常停轮——门不得同轮连过；G5 承诺拍板卡未呈现前，"
+          "任何节不得落承诺数字（全部待补 + 批注）。", flush=True)
     if not fresh:
         return  # 复用模式：打印 URL 即退出，服务由原进程持有
     try:

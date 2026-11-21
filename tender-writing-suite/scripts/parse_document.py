@@ -2,16 +2,19 @@
 """parse_document.py — 招标文件解析：docx/pdf/txt/md → Markdown + 行号大纲 + 元信息。
 
 用法：
-    python3 parse_document.py <文件路径> [-o 输出根目录]
+    python3 parse_document.py <文件路径> [-o 输出根目录] [--page-cap N]
 
 输出（默认落 work/parse/<文件名含扩展名>/）：
     <名>.md            全文 Markdown（PDF 每页前有 <!-- p:N --> 页码锚点）
     <名>.outline.json  标题树，节点带 start_line/end_line（1 起，闭区间）
     <名>.meta.json     sha256 / 识别方式 / 规模 / 警示
 
-幂等：三件产物已存在且 meta.sha256 与源文件一致 → [解析跳过]，不重转。
-已知边界：.doc 与扫描件（图片型 PDF）不支持；PDF 通道按纯文本逐行提取，
-不识别表格框线。
+扫描件（图片型 PDF）两段式：首跑栅格化各页到 pages/ 并生成 <名>.transcript.md
+转写模板 → [解析转写待办]；按规程逐页视觉誊录后重跑同一命令 → 归一化落盘
+三件套 → [解析成功]（conversion=pdf-scanned-transcript）。页数超上限先停轮，
+确认成本后用 --page-cap 提升。
+幂等：产物已存在且 meta.sha256 与源文件一致 → [解析跳过]，不重转。
+已知边界：PDF 通道按纯文本逐行提取，不识别表格框线（关键表格须页图目视核对）。
 """
 
 from __future__ import annotations
@@ -20,12 +23,15 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 MIN_TEXT_CHARS = 100
 BLANK_KEEP = 2
+SCAN_PAGE_CAP = 40
 
 _CN = r"[一二三四五六七八九十百零]+"
 _CN_NUM = r"[一二三四五六七八九十百零\d]+"
@@ -43,6 +49,8 @@ CONV_CN = {
     "docx-plain": "未识别出章节结构（大纲不可用，定位请用关键词检索）",
     "pdf-numbered": "中文编号识别（标题印在原文、可验证，层级可能不完整）",
     "pdf-plain": "未识别出章节结构（大纲不可用，定位请用关键词检索）",
+    "pdf-scanned": "扫描件已栅格化为页图，待视觉转写后重跑本命令完成解析",
+    "pdf-scanned-transcript": "扫描件视觉转写（模型逐页读图誊录；数字/专名须对照 pages/ 页图复核）",
     "passthrough": "文本透传（无结构信息，定位请用关键词检索）",
 }
 
@@ -126,7 +134,9 @@ def _image_count(p) -> int:
 
 
 def _table_pipe(tbl) -> list[str]:
-    rows = [[" ".join((c.text or "").split())[:200] or " " for c in r.cells]
+    # 单元格全文进 md（不做截断）：截断会让评分表长单元格尾项与前附表关键值
+    # （如「磋商保证金：无」）静默丢失，且派生虚假「缺失型澄清」——宁可行长勿缺。
+    rows = [[" ".join((c.text or "").split()) or " " for c in r.cells]
             for r in tbl.rows]
     if not rows:
         return []
@@ -225,12 +235,7 @@ def _level_by_number(s: str, has_l1: bool) -> int | None:
 
 # ---------------------------------------------------------------- pdf 通道
 
-def parse_pdf(src: Path, L: Lines) -> tuple[str, list[str]]:
-    try:
-        import pypdfium2 as pdfium
-    except ImportError:
-        need_deps(["pypdfium2"])
-    pdf = pdfium.PdfDocument(str(src))
+def _pdf_extract_pages(pdf) -> tuple[list[list[str]], int]:
     pages: list[list[str]] = []
     total_chars = 0
     for i in range(len(pdf)):
@@ -244,10 +249,21 @@ def parse_pdf(src: Path, L: Lines) -> tuple[str, list[str]]:
         while lines and lines[-1] == "":
             lines.pop()
         pages.append(lines)
+    return pages, total_chars
+
+
+def parse_pdf(src: Path, L: Lines, out_root: Path,
+              page_cap: int) -> tuple[str, list[str], int | None]:
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        need_deps(["pypdfium2"])
+    pdf = pdfium.PdfDocument(str(src))
+    raw_pages, total_chars = _pdf_extract_pages(pdf)
+    n = len(pdf)
     if total_chars < MIN_TEXT_CHARS:
-        die(f"转换结果过短（{total_chars} 字符）。若输入为 PDF，疑似扫描件（图片型 PDF）："
-            f"请提供文本型 PDF 或 .docx（扫描件云端识别不在本技能范围内）")
-    pages, hf_warnings = _strip_headers_footers(pages)
+        return _scanned_flow(src, pdf, L, out_root, page_cap)
+    pages, hf_warnings = _strip_headers_footers(raw_pages)
     for i, p in enumerate(pages):
         L.emit(f"<!-- p:{i + 1} -->")
         for line in p:
@@ -255,13 +271,134 @@ def parse_pdf(src: Path, L: Lines) -> tuple[str, list[str]]:
         L.emit("")
     L.emit("")
     warnings = ["PDF 通道按纯文本逐行提取（不识别表格框线），"
-                "评分表/前附表等请按文本行逐行核对"] + hf_warnings
+                "评分表/前附表等请按文本行逐行核对，关键表格对照页图目视核对"] + hf_warnings
+    warnings += _mixed_scan_warning(raw_pages)
     _numbering_pass(L)
     conv = "pdf-numbered" if L.headings else "pdf-plain"
     if conv == "pdf-plain":
         warnings.append("未识别出章节结构（无书签/无编号），大纲不可用，定位请用关键词检索")
-    meta_pages = len(pdf)
-    return conv, warnings, meta_pages
+    return conv, warnings, n
+
+
+def _mixed_scan_warning(raw_pages: list[list[str]]) -> list[str]:
+    """混排 PDF：部分页文本层缺失（疑似扫描页）时告警，不阻断文本解析。"""
+    n = len(raw_pages)
+    if n < 5:
+        return []
+    weak = [i + 1 for i, p in enumerate(raw_pages) if sum(len(x) for x in p) < 30]
+    if len(weak) < max(2, int(n * 0.25)):
+        return []
+    shown = "、".join(f"p{w}" for w in weak[:8]) + ("等" if len(weak) > 8 else "")
+    return [f"第 {shown} 页文本层缺失（疑似扫描页），这些页内容不在解析产物中——"
+            f"必要时对 {len(weak)} 页单独视觉补录"]
+
+
+_TRANSCRIPT_HINT = ("<!-- 扫描件视觉转写模板：把每页文字誊录到对应页锚之下（规程见技能 "
+                    "references/transcribe-scans.md），誊完重跑本命令完成解析 -->")
+
+
+def _scanned_flow(src: Path, pdf, L: Lines, out_root: Path,
+                  page_cap: int) -> tuple[str, list[str], int]:
+    n = len(pdf)
+    if n > page_cap:
+        die(f"扫描件共 {n} 页，超过视觉转写页数上限 {page_cap}（转写耗时与页数成正比）。"
+            f"确认成本后可用 --page-cap <N> 提升上限重跑")
+    pages_dir = out_root / "pages"
+    if not (pages_dir.is_dir() and len(list(pages_dir.glob("p*.png"))) == n):
+        try:
+            from PIL import Image  # noqa: F401  确认 Pillow 可用
+        except ImportError:
+            need_deps(["pypdfium2", "Pillow"])
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(n):
+            pdf[i].render(scale=2).to_pil().save(pages_dir / f"p{i + 1:03d}.png")
+    template = out_root / f"{src.stem}.transcript.md"
+    if not template.is_file():
+        parts = [_TRANSCRIPT_HINT, ""]
+        for i in range(n):
+            parts.append(f"<!-- p:{i + 1} -->")
+            parts.append(f"<!-- 待转写：对照 pages/p{i + 1:03d}.png 逐行誊录本页文字 -->")
+            parts.append("")
+        template.write_text("\n".join(parts), encoding="utf-8")
+    sections = _transcript_sections(template.read_text(encoding="utf-8"))
+    missing = [p for p in range(1, n + 1) if not sections.get(p)]
+    if missing:
+        shown = "、".join(f"p{m}" for m in missing[:10]) + ("等" if len(missing) > 10 else "")
+        print(f"[解析转写待办] {src.name} → {out_root.as_posix()}/")
+        print(f"  扫描件 {n} 页已栅格化 → pages/pNNN.png；转写模板 {template.name}")
+        print("  按 references/transcribe-scans.md 规程逐页誊录后重跑本命令完成解析")
+        print(f"  缺转写页：{shown}（每页锚下至少 1 行正文，空白页写（空白页））")
+        return "pdf-scanned", [], n
+    _finalize_transcript(sections, n, L)
+    _numbering_pass(L)
+    warnings = ["扫描件视觉转写：文字/数字/专名由模型读图誊录，可能识别错误——"
+                "关键值须对照 pages/ 页图复核后使用",
+                "评分表/前附表等关键表格请对照页图目视核对框线、合并格与行序"]
+    if not L.headings:
+        warnings.append("转写文本未识别出编号标题，大纲不可用，定位请用关键词检索")
+    return "pdf-scanned-transcript", warnings, n
+
+
+def _transcript_sections(text: str) -> dict[int, list[str]]:
+    """转写模板 → {页号: [内容行]}（注释行与空行不算内容）。"""
+    sections: dict[int, list[str]] = {}
+    cur: list[str] | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        m = re.match(r"^<!--\s*p:(\d+)\s*-->$", line)
+        if m:
+            cur = sections.setdefault(int(m.group(1)), [])
+            continue
+        if cur is None or not line or line.startswith("<!--"):
+            continue
+        cur.append(line)
+    return sections
+
+
+def _finalize_transcript(sections: dict[int, list[str]], n_pages: int, L: Lines) -> None:
+    """转写内容归一化为标准 md：页锚 + 正文行，注释行剔除。"""
+    for p in range(1, n_pages + 1):
+        L.emit(f"<!-- p:{p} -->")
+        for line in sections.get(p, []):
+            L.emit(line)
+        L.emit("")
+
+
+# ---------------------------------------------------------------- .doc 通道
+
+def _find_soffice() -> str | None:
+    exe = shutil.which("soffice") or shutil.which("libreoffice")
+    if exe:
+        return exe
+    for cand in ("/Applications/LibreOffice.app/Contents/MacOS/soffice",
+                 "/usr/bin/soffice", "/usr/local/bin/soffice",
+                 "/opt/homebrew/bin/soffice"):
+        if Path(cand).is_file():
+            return cand
+    return None
+
+
+def _doc_to_docx(src: Path, out_root: Path) -> Path:
+    """.doc → docx（LibreOffice 无头转换，落 out_root/_converted.docx）。"""
+    soffice = _find_soffice()
+    if not soffice:
+        die(".doc 解析需要 LibreOffice 自动转换：未检测到 soffice。"
+            "请安装 LibreOffice，或将文件用 Word/WPS 另存为 .docx 后重试")
+    out_root.mkdir(parents=True, exist_ok=True)
+    profile = (out_root / ".lo-profile").resolve()  # 绝对路径：相对路径会让 file:// URL 失效、soffice 挂起
+    cmd = [soffice, "--headless", f"-env:UserInstallation=file://{profile.as_posix()}",
+           "--convert-to", "docx", "--outdir", str(out_root), str(src)]
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=300, check=False)
+    except subprocess.TimeoutExpired:
+        die("LibreOffice 转换超时（300s）。请手工另存为 .docx 后重试")
+    produced = out_root / (src.stem + ".docx")
+    if not produced.is_file():
+        die("LibreOffice 转换未产出文件（可能版本不兼容）。请手工另存为 .docx 后重试")
+    target = out_root / "_converted.docx"
+    target.write_bytes(produced.read_bytes())
+    produced.unlink()
+    return target
 
 
 def _strip_headers_footers(pages: list[list[str]]) -> tuple[list[list[str]], list[str]]:
@@ -360,13 +497,13 @@ def _outline_max_end(nodes: list) -> int:
     return mx
 
 
-def artifacts_consistent(out_root: Path, src: Path, old: dict) -> tuple[bool, str]:
+def artifacts_consistent(out_root: Path, stem: str, is_docx: bool, old: dict,
+                         extra_files: list[Path] | None = None) -> tuple[bool, str]:
     """幂等跳过前的产物对账：文件齐全 + 产物哈希与登记一致 + 行号不越界。"""
-    stem = src.stem
     md = out_root / f"{stem}.md"
     ol = out_root / f"{stem}.outline.json"
     el = out_root / f"{stem}.elements.json"
-    files = [md, ol] + ([el] if src.suffix.lower() == ".docx" else [])
+    files = [md, ol] + ([el] if is_docx else []) + list(extra_files or [])
     if not all(p.is_file() for p in files):
         return False, "解析产物缺失"
     digest = artifacts_digest(files)
@@ -403,23 +540,35 @@ def print_summary(tag: str, name: str, out_root: Path, meta: dict) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="招标文件解析（docx/pdf/txt/md → md+outline+meta）")
+    ap = argparse.ArgumentParser(description="招标文件解析（docx/doc/pdf/txt/md → md+outline+meta）")
     ap.add_argument("input", help="源文件路径")
     ap.add_argument("-o", "--out-dir", default="work/parse", help="输出根目录（默认 work/parse）")
+    ap.add_argument("--page-cap", type=int, default=SCAN_PAGE_CAP,
+                    help=f"扫描件视觉转写页数上限（默认 {SCAN_PAGE_CAP}）")
     args = ap.parse_args()
 
     src = Path(args.input)
     if not src.is_file():
         die(f"文件不存在：{src}")
     suffix = src.suffix.lower()
-    if suffix not in {".docx", ".pdf", ".txt", ".md"}:
-        die(f"暂不支持该格式：{suffix}（支持 .docx / .pdf / .txt / .md；"
-            f".doc 请用 Word 另存为 .docx；扫描件请提供文本型 PDF）")
+    if suffix not in {".docx", ".doc", ".pdf", ".txt", ".md"}:
+        die(f"暂不支持该格式：{suffix}（支持 .docx / .doc / .pdf / .txt / .md）")
 
     out_root = Path(args.out_dir) / src.name
-    md_path = out_root / (src.stem + ".md")
-    ol_path = out_root / (src.stem + ".outline.json")
-    meta_path = out_root / (src.stem + ".meta.json")
+    stem = src.stem
+    md_path = out_root / (stem + ".md")
+    ol_path = out_root / (stem + ".outline.json")
+    meta_path = out_root / (stem + ".meta.json")
+    transcript_path = out_root / (stem + ".transcript.md")
+
+    parse_src = src
+    is_docx = suffix == ".docx"
+    conv_warnings: list[str] = []
+    if suffix == ".doc":
+        parse_src = _doc_to_docx(src, out_root)
+        is_docx = True
+        conv_warnings.append("源为 .doc：已经 LibreOffice 转换为 docx 解析（版式/图片可能失真），"
+                             "交付级内容请核对原件")
 
     sha = sha256_of(src)
     if meta_path.is_file():
@@ -428,7 +577,8 @@ def main() -> None:
         except Exception:
             old = None  # meta 损坏视为无，走全量重析
         if old is not None and old.get("sha256") == sha:
-            ok, reason = artifacts_consistent(out_root, src, old)
+            extra = [transcript_path] if old.get("conversion") == "pdf-scanned-transcript" else []
+            ok, reason = artifacts_consistent(out_root, stem, is_docx, old, extra)
             if ok:
                 print_summary("解析跳过", src.name, out_root, old)
                 print("  内容未变化（sha256 一致），沿用已有产物")
@@ -439,10 +589,10 @@ def main() -> None:
     pages = None
     elements: list[list[int]] | None = None
     try:
-        if suffix == ".docx":
-            conv, warnings, elements = parse_docx(src, L)
+        if is_docx:
+            conv, warnings, elements = parse_docx(parse_src, L)
         elif suffix == ".pdf":
-            conv, warnings, pages = parse_pdf(src, L)
+            conv, warnings, pages = parse_pdf(src, L, out_root, args.page_cap)
         else:
             conv, warnings = parse_passthrough(src, L)
     except SystemExit:
@@ -450,6 +600,10 @@ def main() -> None:
     except Exception as exc:
         die(f"解析器内部错误（{type(exc).__name__}: {exc}）。"
             f"可尝试换用另一种格式（如 .docx / 文本型 PDF）后重试")
+    warnings = conv_warnings + warnings
+
+    if conv == "pdf-scanned":
+        return  # 扫描件已栅格化待转写：待办信息已打印，产物待转写后重跑生成
 
     while L.lines and L.lines[-1] == "":
         L.lines.pop()
@@ -460,17 +614,19 @@ def main() -> None:
     out_root.mkdir(parents=True, exist_ok=True)
     md_path.write_text("\n".join(L.lines), encoding="utf-8")
     ol_path.write_text(json.dumps(outline, ensure_ascii=False, indent=1), encoding="utf-8")
+    artifact_files = [md_path, ol_path]
     if elements is not None:
         elements = [[o, s_, min(e_, total)] for o, s_, e_ in elements]
-        (out_root / (src.stem + ".elements.json")).write_text(
+        (out_root / (stem + ".elements.json")).write_text(
             json.dumps(elements, ensure_ascii=False), encoding="utf-8")
+        artifact_files.append(out_root / (stem + ".elements.json"))
+    if conv == "pdf-scanned-transcript":
+        artifact_files.append(transcript_path)
 
     meta = {
         "source": src.name,
         "sha256": sha,
-        "artifacts_sha256": artifacts_digest(
-            [md_path, ol_path] + ([out_root / (src.stem + ".elements.json")] if elements is not None else [])
-        ) or "",
+        "artifacts_sha256": artifacts_digest(artifact_files) or "",
         "bytes": src.stat().st_size,
         "conversion": conv,
         "chars": sum(len(l) for l in L.lines),
@@ -482,6 +638,8 @@ def main() -> None:
         "warnings": warnings,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
+    if conv == "pdf-scanned-transcript":
+        meta["transcript_sha256"] = sha256_of(transcript_path)
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     print_summary("解析成功", src.name, out_root, meta)
 

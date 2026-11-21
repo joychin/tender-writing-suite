@@ -3,7 +3,7 @@
 
 职责边界：
 - 破坏性写入（目录树 / 写作指引 / 承诺清单）先校验基底 sha，写前留备份（每文件留 3 份）；
-- 追加性写入（澄清裁决、确认门记录）只追加/定点替换，不整写文件；
+- 追加性写入（澄清处理、确认门记录）只追加/定点替换，不整写文件；
 - 引擎只落盘与报 diff，不跑 check_writing（调用方在应用后自行重跑校验）。
 
 修改包 schema（op 制，完整示例见 templates/example-review-patch.json）：
@@ -35,7 +35,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from check_writing import LEGAL_FIGURES, LEGAL_MODES, MATERIAL_TOKEN, table_rows
+from check_writing import (LEGAL_FIGURES, LEGAL_MODES, MATERIAL_TOKEN,
+                           _parse_annotations, table_rows)
 from docx_toolkit import build_tree, parse_outline, sanitize_name
 
 OUTLINE_RELPATH = "outline/tender-response-docs.md"
@@ -207,25 +208,7 @@ def apply_tree_ops(roots: list[dict], ops: list[dict], errors: list, vol_label: 
 
 
 # ---------- outline md 回写（三段外科替换） ----------
-
-def _parse_annotations(lines: list[str]) -> dict[int, dict]:
-    """每卷的 来源标注/目录说明 `名称 :: 内容` 映射（按文件行序）。"""
-    result: dict[int, dict] = {}
-    vi, sec = -1, None
-    for ln in lines:
-        if ln.startswith("# 响应文件："):
-            vi += 1
-            sec = None
-            result[vi] = {"name": ln[len("# 响应文件："):].strip(), "src:": {}, "desc:": {}}
-        elif ln.startswith("## ") and vi >= 0:
-            sec = ln[3:].strip()
-        elif vi >= 0 and sec in ("来源标注", "目录说明") and ln.lstrip().startswith("- "):
-            body = ln.strip()[2:]
-            if " :: " in body:
-                name, rest = body.split(" :: ", 1)
-                result[vi]["src:" if sec == "来源标注" else "desc:"].setdefault(
-                    name.strip(), rest.strip())
-    return result
+# （_parse_annotations 已下沉 check_writing——1.8.0，从那里 import）
 
 
 def _section_spans(lines: list[str]) -> dict[int, dict[str, tuple[int, int]]]:
@@ -453,7 +436,7 @@ def validate_guide_entry(e: dict, expected_keys: set[str]) -> str | None:
     return None
 
 
-# ---------- 澄清裁决 / 确认门（追加性写入） ----------
+# ---------- 澄清处理 / 确认门（追加性写入） ----------
 
 def merge_decisions(work: Path, patch: dict, report: dict) -> None:
     dpath = work / DECISIONS_RELPATH
@@ -485,20 +468,24 @@ def merge_decisions(work: Path, patch: dict, report: dict) -> None:
 
 def append_clar_verdicts(work: Path, patch: dict, errors: list, report: dict,
                          counter: list) -> None:
-    """裁决写进 clarifications.md 的 `## 裁决记录` 段（同 id 定点替换，无则追加段）。"""
+    """处理答复写进 clarifications.md 的 `## 处理记录` 段（同 id 定点替换，无则追加段）；
+    旧 `## 裁决记录` 段名原位归一为「处理记录」，旧行键「裁决=」的行保留、仅同 id 整行替换。"""
     items = patch.get("clarifications", [])
     if not items:
         return
     relpath = CLAR_RELPATH
     path = work / relpath
     if not path.is_file():
-        errors.append(f"澄清清单不存在：work/{relpath}（先完成要点提取再裁决）")
+        errors.append(f"澄清清单不存在：work/{relpath}（先完成要点提取再登记处理）")
         return
     lines = path.read_text(encoding="utf-8").split("\n")
-    sec_start = next((i for i, ln in enumerate(lines) if ln.strip() == "## 裁决记录"), None)
+    sec_start = next((i for i, ln in enumerate(lines)
+                      if ln.strip() in {"## 处理记录", "## 裁决记录"}), None)
     if sec_start is None:
-        lines += ["", "## 裁决记录"]
+        lines += ["", "## 处理记录"]
         sec_start = len(lines) - 1
+    else:
+        lines[sec_start] = "## 处理记录"  # 旧段名归一
     sec_end = len(lines)
     for j in range(sec_start + 1, len(lines)):
         if lines[j].startswith("#"):
@@ -513,7 +500,7 @@ def append_clar_verdicts(work: Path, patch: dict, errors: list, report: dict,
         cid = str(c.get("id", "")).strip().upper()
         if not CLAR_ID.match(cid):
             continue
-        line = (f"- {cid} :: 裁决={_cell(c.get('verdict', '按建议'))}"
+        line = (f"- {cid} :: 处理={_cell(c.get('verdict', '按建议'))}"
                 f" | 备注={_cell(c.get('note', ''))} | 时间={_now()}")
         if cid in existing:
             lines[existing[cid]] = line
@@ -631,7 +618,7 @@ def apply_patch(work: Path, patch: dict) -> dict:
                         "item", "承诺清单", errors, report, counter)
         if errors:  # 表格合并中途失败则到此为止（已写部分有备份可回退）
             return {"ok": False, "stage": "write", "errors": errors, **report}
-        # 5) 追加性写入：澄清裁决 + 确认门
+        # 5) 追加性写入：澄清处理 + 确认门
         append_clar_verdicts(work, patch, errors, report, counter)
         merge_decisions(work, patch, report)
     except OSError as exc:
@@ -675,7 +662,7 @@ def main() -> None:
     for w in result["written"]:
         print(f"- 已写入 work/{w['file']}" + (f"（备份 {w['backup']}）" if w["backup"] else ""))
     for group, label in (("added", "新增节点"), ("removed", "删除节点"), ("renames", "改名"),
-                         ("gates", "确认门"), ("clarifications", "澄清裁决"),
+                         ("gates", "确认门"), ("clarifications", "澄清处理"),
                          ("写作指引_updated", "指引更新"), ("写作指引_added", "指引新增"),
                          ("写作指引_removed", "指引删行"), ("承诺清单_updated", "承诺更新"),
                          ("guide_key_migrated", "指引改键"),

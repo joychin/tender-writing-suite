@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """self_check.py — 技能包上架前结构自检（重发新版时重跑）。
 
-检查：frontmatter 必填字段、name/description 规格上限、SKILL.md 正文规模、
+检查：frontmatter 必填字段、name/description 规格上限、SKILL.md 正文 token 规模、
 产品专属词残留、沿革从句、@references 指向的文件存在。
 """
 
@@ -26,6 +26,12 @@ FORBIDDEN = [
     "task 工具", "deepagents",
 ]
 CHANGELOG_PHRASES = re.compile(r"此前|不再|原先|旧版|自\s*20\d\d\s*年起|历史上曾")
+
+# SKILL.md 正文 token 闸（官方建议 body < 5000 tokens，见 agentskills.io 规范）。
+# 汉字按 1 token/字数词远低报真实成本（实测约 1.6 token/字），闸门必须按 token 算：
+# 装了 tiktoken 用 cl100k 实测；没有则用无依赖估算——16 个本仓文件拟合，
+# cjk×1.55 + latin词×1.0，偏差 ±4% 以内且偏保守（宁可高估放行少）。
+BODY_TOKEN_LIMIT = 5000
 
 
 def parse_frontmatter(text: str) -> dict:
@@ -66,10 +72,15 @@ def yaml_safety(text: str) -> str | None:
         return f"frontmatter YAML 解析失败（装包平台同样会拒）：{exc}"
 
 
-def word_count(body: str) -> int:
-    cjk = len(re.findall(r"[\u4e00-\u9fff]", body))
-    latin = len(re.findall(r"[A-Za-z0-9]+", body))
-    return cjk + latin
+def token_count(body: str) -> tuple[int, str]:
+    """返回 (token 数, 口径标记)。tiktoken 实测优先，无依赖时估算。"""
+    try:
+        import tiktoken
+    except ImportError:
+        cjk = len(re.findall(r"[\u4e00-\u9fff]", body))
+        latin = len(re.findall(r"[A-Za-z0-9]+", body))
+        return round(cjk * 1.55 + latin), "估算"
+    return len(tiktoken.get_encoding("cl100k_base").encode(body)), "实测"
 
 
 def check(pkg: Path) -> list[str]:
@@ -89,9 +100,10 @@ def check(pkg: Path) -> list[str]:
         problems.append(f"{pkg.name}: name 不合规（小写字母/数字/连字符 ≤64）：{name}")
     if len(meta.get("description", "")) > 1024:
         problems.append(f"{pkg.name}: description 超 1024 字符")
-    wc = word_count(body)
-    if wc > 5000:
-        problems.append(f"{pkg.name}: SKILL.md 正文 {wc} 词，超出 5k 上限")
+    tc, basis = token_count(body)
+    if tc > BODY_TOKEN_LIMIT:
+        problems.append(f"{pkg.name}: SKILL.md 正文约 {tc} tokens（{basis}），"
+                        f"超出 {BODY_TOKEN_LIMIT} 上限——细节下沉 references/")
     for d in ("references", "scripts", "templates"):
         if (pkg / d).is_dir() and not any((pkg / d).iterdir()):
             problems.append(f"{pkg.name}: {d}/ 为空目录")
@@ -108,7 +120,8 @@ def check(pkg: Path) -> list[str]:
         if m:
             s = max(0, m.start() - 20)
             problems.append(f"{md.relative_to(ROOT)}: 沿革从句「{m.group(0)}」…{text[s:m.end()+20]!r}")
-    print(f"  {pkg.name}: 正文 {wc} 词，frontmatter {len(meta)} 字段")
+    print(f"  {pkg.name}: 正文约 {tc} tokens（{basis}，上限 {BODY_TOKEN_LIMIT}），"
+          f"frontmatter {len(meta)} 字段")
     return problems
 
 

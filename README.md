@@ -8,7 +8,7 @@
 **已在多份真实标书的完整编写中实战使用——每个版本都由真实项目复盘打磨而来。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.3.2-blue.svg)](listing/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](listing/CHANGELOG.md)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-informational)
 ![Offline](https://img.shields.io/badge/%E7%BD%91%E7%BB%9C-%E7%BA%AF%E6%9C%AC%E5%9C%B0%E8%BF%90%E8%A1%8C-success)
 
@@ -102,9 +102,9 @@ pip install python-docx pypdfium2 docxcompose Pillow
 ```text
 tender-writing-suite/
 ├── SKILL.md              # 技能入口：双语元数据 + 全流程编排纪律
-├── references/           # 9 份方法论（解析 / 要点 / 目录 / 证据 / 正文 / 版式……）
+├── references/           # 10 份方法论（解析 / 要点 / 目录 / 证据 / 正文 / 转写 / 版式……）
 ├── scripts/
-│   ├── parse_document.py # 解析：md + outline.json + meta.json（docx 另有元素映射，供保真拷贝）
+│   ├── parse_document.py # 解析：md + outline.json + meta.json（扫描件栅格化转写；docx 另有元素映射）
 │   ├── docx_toolkit.py   # docx 全生命周期：create / revise / comment / image / diagram
 │   │                     #   / render-page / copy-from / assemble / toc-pages
 │   ├── check_writing.py  # 机器校验：指引 / 单节 / 全局承诺比对 + 查重 + 残留扫描
@@ -118,8 +118,10 @@ tender-writing-suite/
   确定性 Python 脚本；模型只做理解、组织与写作，每一步都有程序兜底。
 - **纯本地运行**：三个脚本零网络请求，招标文件与公司素材不出本机。
 - **正文干净**：占位与待办一律走 Word 批注，交付稿里没有任何占位文字（机器扫描兜底）。
-- **能力边界如实说明**：扫描件（图片型 PDF）与 `.doc` 不支持；甘特图 / 架构图出真图
-  需要 `matplotlib` 与中文字体（缺失时自动回落表格表达）；公司事实与素材来自你的
+- **能力边界如实说明**：扫描件（图片型 PDF）走视觉转写通道——解析器栅格化页图，
+  由模型逐页誊录（默认页数上限 40，需宿主具备读图能力）；`.doc` 检测到
+  LibreOffice 时自动转 docx 再解析；甘特图 / 架构图按真图阶梯出图：
+  `matplotlib` → 浏览器渲染 → 表格表达；公司事实与素材来自你的
   知识库 / 上传文件，不联网检索。
 
 ## 维护者

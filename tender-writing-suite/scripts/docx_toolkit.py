@@ -788,10 +788,46 @@ def cmd_revise(args) -> None:
             die(f"--cell 格式应为 T1R2C3：{args.cell}")
         t, r, c = (int(x) for x in m.groups())
         tbl = _find_table(doc, t)
+        if r > len(tbl.rows):
+            die(f"格 {args.cell} 越界（该表 {len(tbl.rows)} 行 × {len(tbl.columns)} 列）")
+        if args.mode == "insert_after":
+            # 在该格所在行之后插一个空行：克隆该行网格（列宽/跨列随行保留）、清空文字。
+            # 格式件模板空行不够时的正路——不校验查重；插行后行号变化须重读坐标。
+            tr = tbl.rows[r - 1]._tr
+            for tc_el in tr.findall(qn("w:tc")):
+                tcpr = tc_el.find(qn("w:tcPr"))
+                if tcpr is not None and tcpr.find(qn("w:vMerge")) is not None:
+                    die("该行含竖向合并格——插行请选普通数据行（克隆合并行会带出悬挂续行）")
+            new_tr = _deepcopy(tr)
+            for tc_el in new_tr.findall(qn("w:tc")):
+                ps = tc_el.findall(qn("w:p"))
+                for p_el in ps:
+                    for r_el in p_el.findall(qn("w:r")):
+                        p_el.remove(r_el)
+                for extra in ps[1:]:
+                    tc_el.remove(extra)
+            tr.addnext(new_tr)
+            doc.save(args.path)
+            print(f"[已插行] {args.path}（T{t}R{r} 之后新增空行，网格随原行克隆）")
+            print("  ⚠️ 行号已变化：后续 revise/comment 前先重新 read 取坐标")
+            return
         try:
-            cell = tbl.cell(r - 1, c - 1)
+            tc = tbl.cell(r - 1, c - 1)._tc
         except Exception:
             die(f"格 {args.cell} 越界（该表 {len(tbl.rows)} 行 × {len(tbl.columns)} 列）")
+        # 合并格守卫：跨列合并行的延续位写入会静默落到锚点格（实测页码错进组行），
+        # 竖向合并延续位写入会落进看不见的续格——都直接拦下并指路
+        row_tcs = tbl.rows[r - 1].cells
+        first_idx = next((i for i, cc in enumerate(row_tcs) if cc._tc is tc), c - 1)
+        if first_idx != c - 1:
+            die(f"{args.cell} 是跨列合并行的延续位（整行一个格子）——"
+                f"组行写入请用锚点格 T{t}R{r}C{first_idx + 1}，数据行请换行")
+        tcpr = tc.find(qn("w:tcPr"))
+        vm = tcpr.find(qn("w:vMerge")) if tcpr is not None else None
+        if vm is not None and vm.get(qn("w:val")) != "restart":
+            die(f"{args.cell} 是竖向合并的延续位（内容在上方合并起始格）——"
+                f"请用 read 视图核对该表合并结构后改写起始格")
+        cell = tbl.cell(r - 1, c - 1)
         cell.text = ""
         run = cell.paragraphs[0].add_run(args.text or "")
         style_run(run, "宋体", 10.5, False)
@@ -941,12 +977,45 @@ def cmd_image(args) -> None:
     print(f"[已插图] {args.path}（{img.name}，全宽居中{note}）")
 
 
+def _parse_pages(spec: str, n_pages: int) -> list[int]:
+    """'3-7' / '3,5,7' / '7' → 去重升序页号列表（1 基，越界报错）。"""
+    got: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, hi = (int(x) for x in part.split("-", 1))
+        else:
+            lo = hi = int(part)
+        if lo < 1 or hi < lo:
+            die(f"--pages 区间不合法：{part}")
+        got.update(range(lo, hi + 1))
+    pages = sorted(got)
+    if not pages:
+        die("--pages 为空")
+    if pages[-1] > n_pages:
+        die(f"--pages 越界：{spec}（该 PDF 共 {n_pages} 页）")
+    return pages
+
+
 def cmd_render_page(args) -> None:
     try:
         import pypdfium2 as pdfium
     except ImportError:
         die("缺少依赖：pypdfium2、Pillow。请先执行：pip install pypdfium2 Pillow", 2)
     pdf = pdfium.PdfDocument(args.pdf)
+    if getattr(args, "pages", ""):
+        pages = _parse_pages(args.pages, len(pdf))
+        out = Path(args.out)
+        made = []
+        for p in pages:
+            img = pdf[p - 1].render(scale=2).to_pil()
+            path = out.parent / f"{out.stem}-p{p:03d}.png"
+            img.save(path)
+            made.append(f"{path}（第 {p} 页，{img.width}×{img.height}）")
+        print(f"[已导出] {len(pages)} 页：\n  " + "\n  ".join(made))
+        return
     if not (1 <= args.page <= len(pdf)):
         die(f"页码越界：{args.page}（该 PDF 共 {len(pdf)} 页）")
     bitmap = pdf[args.page - 1].render(scale=2)
@@ -1121,10 +1190,12 @@ def _matplotlib_with_cjk():
     try:
         import matplotlib
     except ImportError:
-        die("环境无 matplotlib——本环境图示请用表格表达，或先执行：pip install matplotlib", 2)
+        die("环境无 matplotlib——真图阶梯改走宿主渲染（HTML/浏览器截图出 PNG 再 image 插入），"
+            "或先执行：pip install matplotlib", 2)
     font = _cjk_font()
     if font is None:
-        die("未检测到中文字体——真图会显示乱码，本环境图示请改用表格表达")
+        die("未检测到中文字体——真图会显示乱码，真图阶梯改走宿主渲染"
+            "（HTML 渲染中文不依赖本机字体）或表格表达")
     matplotlib.rcParams["font.sans-serif"] = [font]
     matplotlib.rcParams["axes.unicode_minus"] = False
     return font
@@ -1424,10 +1495,12 @@ def _restart_pagenum_at_one(sect) -> None:
 def _front_section_no_pagenum(master: Document, toc_end, toc_marker) -> bool:
     """前置整节（封面/前置/目录页）零页眉页脚引用、页码不编；正文节（终节）
     页码自 1 重起——行业惯例（2026-11-20 拍板：标书正文第一页=第 1 页）。
-    分节符插在目录块结束锚点之后：封面/前置/目录同属前置节，目录页也不带
-    页码。零引用前置节 + default 页脚正文节的组合沿自实测矩阵 m5（比 titlePg
-    稳：LibreOffice 下 titlePg 节后跟普通节会页码错位 m1/m3）。无目录锚点时
-    返回 False（调用方退回 titlePg 方案，此时页码从封面连续编）。"""
+    分节符并入目录块结束锚点段的 pPr（不另插独立空段——空段会在目录页近满时
+    溢出成无页脚空白页，既多一张白页又把 toc-pages 的页码推算顶歪一位，实测
+    差 1 缺陷根因）：封面/前置/目录同属前置节，目录页也不带页码。零引用前置
+    节 + default 页脚正文节的组合沿自实测矩阵 m5（比 titlePg 稳：LibreOffice
+    下 titlePg 节后跟普通节会页码错位 m1/m3）。无目录锚点时返回 False（调用
+    方退回 titlePg 方案，此时页码从封面连续编）。"""
     anchor = toc_end if toc_end is not None else toc_marker
     if anchor is None:
         return False
@@ -1450,7 +1523,11 @@ def _front_section_no_pagenum(master: Document, toc_end, toc_marker) -> bool:
     tp = sect.find(qn("w:titlePg"))
     if tp is not None:
         sect.remove(tp)
-    anchor.addnext(_para_with_sect(sect))
+    ppr = anchor.find(qn("w:pPr"))
+    if ppr is None:
+        ppr = OxmlElement("w:pPr")
+        anchor.insert(0, ppr)
+    ppr.append(sect)
     tp = final.find(qn("w:titlePg"))
     if tp is not None:
         final.remove(tp)
@@ -1601,8 +1678,12 @@ def cmd_assemble(args) -> None:
                 used_files.add(sf)
             else:
                 warnings.append(f"缺失节：{title}（{'前置页' if in_front else '章节'}，整本中留空位）")
+            # 前置节（封面之后的评分索引表/报价函等格式件）每节独立起页——
+            # Word 与 LibreOffice 度量不同，封面溢行时格式件会贴到上一页
+            # （2026-11-21 实测），段前分页对齐正文章的独立起页惯例
             if not _apply_chapter_number(master, title, num,
-                                         page_break=(depth == 1 and not in_front and bool(num))):
+                                         page_break=(in_front and merged > 0)
+                                                     or (depth == 1 and not in_front and bool(num))):
                 if exists:
                     warnings.append(f"节文件内标题与目录不一致（目录：{title}）——编号未应用，"
                                     f"改节文件标题与目录逐字一致后重新合册")
@@ -1769,26 +1850,20 @@ def _enable_update_fields(doc: Document) -> None:
 def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]):
     """在目录标题段之后插入静态条目（TOC 域包裹；条目带点线制表位——
     未更新域前也有目录观感，Word/WPS 打开经 updateFields 刷新出真页码）。
-    返回目录块结束锚点（域 end 段）——合册分节符插在它之后，目录页归
-    前置节、不带页码。"""
+    返回目录块结束锚点=视觉末条目段（域 end 并入该段）——合册分节符直接挂在
+    它身上，目录页归前置节、不带页码；不产生任何尾随空段（空段会在目录页
+    近满时溢出成无页脚空白页，把 toc-pages 的页码推算顶歪一位——实测教训）。"""
     from docx.enum.text import WD_TAB_ALIGNMENT, WD_TAB_LEADER
     from docx.text.paragraph import Paragraph
 
     if marker is None or not entries:
         return None
-    prev = marker
 
     def _insert_after(el, ref):
         ref.addnext(el)
         return el
 
-    endp = _insert_after(OxmlElement("w:p"), prev)
-    endrun = OxmlElement("w:r")
-    fc = OxmlElement("w:fldChar")
-    fc.set(qn("w:fldCharType"), "end")
-    endrun.append(fc)
-    endp.append(endrun)
-    anchor = endp
+    p_first = p_last = None  # 循环按倒序插入：末次插入=视觉首条目，首次插入=视觉末条目
     for text, depth, missing in reversed(entries):
         p = _insert_after(OxmlElement("w:p"), marker)
         entry = Paragraph(p, master)
@@ -1799,9 +1874,11 @@ def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]):
         label = text + ("（另附）" if missing else "") + "\t"
         run = entry.add_run(label)
         style_run(run, "宋体", 12, depth == 1)
-        anchor = p
+        if p_last is None:
+            p_last = p
+        p_first = p
     # TOC 域包裹静态清单：begin+instr+separate 插到第一条目的 pPr 之后
-    first = anchor
+    first = p_first
     base = 1 if first.find(qn("w:pPr")) is not None else 0
     fld = OxmlElement("w:r")
     fldc = OxmlElement("w:fldChar")
@@ -1819,7 +1896,13 @@ def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]):
     first.insert(base, sep)
     first.insert(base, instr)
     first.insert(base, fld)
-    return endp
+    # 域 end 并入视觉末条目段（不再产独立空段——见函数 docstring）
+    endrun = OxmlElement("w:r")
+    fc3 = OxmlElement("w:fldChar")
+    fc3.set(qn("w:fldCharType"), "end")
+    endrun.append(fc3)
+    p_last.append(endrun)
+    return p_last
 
 
 def _heading_para(master: Document, title: str):
@@ -2097,6 +2180,10 @@ def _measure_heading_pages(pdf_path: Path, labels: list[str],
         while end + 1 < len(has_leader) and has_leader[end + 1]:
             end += 1
         start = end + 1
+    # 目录后的无字空白页（前置节尾空段溢出残留）不计入正文页号——正文首页是
+    # 目录之后第一张有内容的页；防御式跳过，正常经 _fill_toc 修复后无空白页
+    while start < len(pages_lines) and not any(pages_lines[start]):
+        start += 1
     off = start if restart else 0  # 前置页数=正文首页的 0 基下标（封面/前置/目录）
     mapping: dict[str, int] = {}
     for label in labels:
@@ -2300,7 +2387,7 @@ def main() -> None:
     sp = sub.add_parser("revise", help="定向修订（直接生效，无修订标记）")
     sp.add_argument("path")
     sp.add_argument("--para", type=_para_no, help="段落号 P#（也接受 3）")
-    sp.add_argument("--cell", help="表格格 T1R2C3")
+    sp.add_argument("--cell", help="表格格 T1R2C3；配 insert_after 在该格所在行后插空行（克隆网格，格式件空行不够时增行用）")
     sp.add_argument("--mode", choices=["replace", "insert_after", "delete"], default="replace")
     sp.add_argument("--find", help="replace：要替换的旧文本")
     sp.add_argument("--text", default="")
@@ -2321,9 +2408,11 @@ def main() -> None:
     sp.add_argument("--caption", default=None, help="图下题注（居中 9pt，Table Caption 样式）")
     sp.set_defaults(func=cmd_image)
 
-    sp = sub.add_parser("render-page", help="PDF 页转 PNG")
+    sp = sub.add_parser("render-page", help="PDF 页转 PNG（--pages 批量）")
     sp.add_argument("pdf")
-    sp.add_argument("page", type=int)
+    sp.add_argument("page", nargs="?", type=int, default=0)
+    sp.add_argument("--pages", default="",
+                    help="批量：'3-7' 或 '3,5,7'——输出 <out主干>-pNNN.png")
     sp.add_argument("-o", "--out", required=True)
     sp.set_defaults(func=cmd_render_page)
 
@@ -2355,7 +2444,9 @@ def main() -> None:
     sp = sub.add_parser("assemble", help="按目录树合册")
     sp.add_argument("--work", default="work")
     sp.add_argument("--numbering", choices=["chapter", "decimal", "gov", "none"],
-                    default="chapter")
+                    default="chapter",
+                    help="章节编号形态：chapter=第X章/1.1；decimal=1/1.1；"
+                         "gov=一、/（一）/1.；none=不编")
     sp.add_argument("--template", help="版式模板 docx（缺省用包内基准模板；用户模板的"
                                        "页面设置与页眉页脚原样保留）")
     sp.set_defaults(func=cmd_assemble)

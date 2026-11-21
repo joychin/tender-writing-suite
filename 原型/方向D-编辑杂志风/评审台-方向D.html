@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN" data-zcode-design>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>标书评审台 · 方向D 编辑杂志风</title>
+<style>
+/* ===== 方向D：编辑杂志风 =====
+   把评审页当一篇要读的文件来排：大标题、左栏编号、单栏正文、克制的青绿。
+   信息密度低于工作台，但层级最清楚，适合截图与汇报。 */
+:root{
+  --bg:#FFFFFF; --surface:#FFFFFF; --sunk:#F7F7F5;
+  --fg:#14161A; --muted:#646B75; --faint:#9AA0A8;
+  --border:#E7E5E0; --border-strong:#CFCCC4;
+  --accent:#0F766E;
+  --danger:#A32B22; --danger-surface:#FCF8F6; --warn:#8A5A12; --ok:#3F6B3A;
+  --serif:"Songti SC","Source Han Serif SC","Noto Serif CJK SC","SimSun",serif;
+  --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --motion:.15s ease;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.75 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+:where(a,button,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms !important}}
+.wrap{max-width:1180px;margin:0 auto;padding:0 48px}
+.spacer{flex:1}
+
+/* 页眉 */
+.site{padding:20px 0;border-bottom:1px solid var(--border)}
+.site .in{display:flex;align-items:baseline;gap:18px;font-size:11px;letter-spacing:.14em;color:var(--muted);white-space:nowrap}
+.site .brand{font-family:var(--serif);font-size:13px;letter-spacing:.2em;color:var(--fg)}
+.site .mono{font-family:var(--mono);letter-spacing:.04em}
+
+/* 封面 */
+.hero{padding:72px 0 44px;border-bottom:1px solid var(--fg)}
+.eyebrow{margin:0 0 22px;font-size:11px;letter-spacing:.22em;color:var(--muted)}
+h1{margin:0;font-family:var(--serif);font-size:46px;line-height:1.28;font-weight:600;letter-spacing:.01em}
+.deck{margin:22px 0 0;font-size:16px;line-height:1.85;color:var(--muted);max-width:38em;text-wrap:pretty}
+.deck b{color:var(--fg);font-weight:500}
+.nav{display:flex;gap:28px;margin-top:36px;font-size:13px;color:var(--muted)}
+.nav a{padding-bottom:4px;border-bottom:1px solid transparent}
+.nav a:hover{color:var(--fg);border-bottom-color:var(--border-strong)}
+.nav a.on{color:var(--fg);border-bottom-color:var(--accent)}
+.nav .n{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:5px}
+
+/* 区段：左标签 + 右内容 */
+.sec{display:grid;grid-template-columns:180px minmax(0,1fr);gap:40px;padding:44px 0;border-bottom:1px solid var(--border)}
+.sec:last-of-type{border-bottom:none}
+.label{font-size:11px;letter-spacing:.14em;color:var(--muted);line-height:1.6}
+.label .no{display:block;font-family:var(--serif);font-size:30px;letter-spacing:0;color:var(--fg);margin-bottom:6px;line-height:1}
+.label .note{display:block;margin-top:14px;font-size:11px;letter-spacing:.02em;color:var(--faint);line-height:1.7}
+.label .note.bad{color:var(--danger)}
+.content{min-width:0}
+
+/* 待确认 */
+.todo{display:grid;grid-template-columns:40px 1fr;gap:18px;padding:0 0 26px;margin-bottom:26px;border-bottom:1px solid var(--border)}
+.todo:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+.todo .ix{font-family:var(--serif);font-size:22px;line-height:1.2;color:var(--faint);font-variant-numeric:tabular-nums}
+.todo h3{margin:0;font-size:16px;font-weight:500;line-height:1.6}
+.todo p{margin:6px 0 0;font-size:13px;color:var(--muted);max-width:56ch;line-height:1.7;text-wrap:pretty}
+.todo .act{display:inline-block;margin-top:8px;font-size:12px;color:var(--fg);border-bottom:1px solid var(--border-strong);padding-bottom:1px}
+.todo .act:hover{border-bottom-color:var(--fg)}
+.flag{display:inline-block;margin-left:10px;font-size:11px;letter-spacing:.06em;color:var(--danger);vertical-align:2px}
+
+/* 评分 */
+.score{width:100%;border-collapse:collapse;font-size:13px}
+.score th{text-align:left;font-weight:400;font-size:10.5px;letter-spacing:.14em;color:var(--muted);padding:0 14px 10px 0;border-bottom:1px solid var(--fg);white-space:nowrap}
+.score td{padding:13px 14px 13px 0;border-bottom:1px solid var(--border);vertical-align:baseline}
+.score .num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12px;width:8%}
+.score .cat{font-family:var(--serif);font-size:15px;white-space:nowrap;width:22%}
+.score tr.sub .cat{font-family:var(--sans);font-size:13px;color:var(--muted);padding-left:16px;font-weight:400}
+.score .state{white-space:nowrap;font-size:11px;letter-spacing:.04em;color:var(--ok)}
+.score .state::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ok);margin-right:7px;vertical-align:1px}
+.score .state.bad{color:var(--danger)}
+.score .state.bad::before{background:var(--danger)}
+.score .gap td{background:var(--danger-surface)}
+.score .miss{color:var(--danger)}
+.score tfoot td{border-bottom:none;font-size:11px;color:var(--muted);padding-top:14px}
+
+/* 废标 */
+.disq{display:grid;gap:22px}
+.disq .item{display:grid;grid-template-columns:1fr;gap:4px;padding-left:18px;border-left:2px solid var(--danger)}
+.disq .q{font-family:var(--serif);font-size:17px;line-height:1.5}
+.disq .meta{font-size:12px;color:var(--muted)}
+.disq .meta em{font-style:normal;color:var(--danger)}
+
+/* 目录 + 承诺 */
+.tree{font-size:13.5px}
+.tnode{display:grid;grid-template-columns:70px 1fr auto;gap:14px;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--border)}
+.tnode .no{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.tnode.lv2{padding-left:22px}
+.tnode.lv2 .nm::before{content:"—";color:var(--faint);margin-right:10px}
+.tnode.missing .nm{color:var(--muted)}
+.badge{font-size:10px;letter-spacing:.08em;color:var(--muted);white-space:nowrap}
+.badge.req{color:var(--accent)}
+.badge.score{color:var(--warn)}
+.promise{margin-top:28px}
+.promise .row{display:grid;grid-template-columns:1fr auto auto;gap:18px;padding:9px 0;border-bottom:1px solid var(--border);font-size:13.5px;align-items:baseline}
+.promise .k{color:var(--muted)}
+.promise .v{font-variant-numeric:tabular-nums;font-weight:500}
+.promise .s{font-size:11px;color:var(--ok)}
+.promise .s.wait{color:var(--warn)}
+.sub-h{margin:34px 0 8px;font-size:11px;letter-spacing:.14em;color:var(--muted)}
+
+/* 页脚 */
+.foot{padding:28px 0 56px;display:flex;font-size:11px;letter-spacing:.06em;color:var(--faint);border-top:1px solid var(--border)}
+
+@media (max-width:900px){
+  .wrap{padding:0 22px}
+  h1{font-size:26px;line-height:1.4;letter-spacing:.01em}
+  .deck{font-size:15px}
+  .sec{grid-template-columns:1fr;gap:18px;padding:34px 0}
+  .label .no{display:inline;font-size:20px;margin-right:10px}
+  .label .note{display:none}
+  .nav{flex-wrap:wrap;gap:14px}
+  .site .in span:nth-child(2){display:none}
+}
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap in">
+    <span class="brand">灵燕 · 投标工作台</span>
+    <span>评审工作底稿</span>
+    <span class="spacer"></span>
+    <span class="mono">QSZBH-2026-0186</span>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <p class="eyebrow">响应文件评审 · 2026-11-21 11:45</p>
+    <h1>某某市人民医院<br>智慧医院信息化建设采购项目</h1>
+    <p class="deck">竞争性磋商，招标文件 36,252 字。<b>三项待确认</b>：两处条款口径冲突、一个待拍板的承诺值，以及一个还没有落章节的 10 分评分点。</p>
+    <nav class="nav" aria-label="评审分区">
+      <a href="#" class="on">总览</a>
+      <a href="#">目录树<span class="n">46</span></a>
+      <a href="#">写作指引<span class="n">12</span></a>
+      <a href="#">承诺清单<span class="n">8</span></a>
+    </nav>
+  </section>
+
+  <section class="sec">
+    <div class="label">
+      <span class="no">01</span>
+      需要你确认的事
+      <span class="note">逐条在本页处理，对话只提醒。</span>
+    </div>
+    <div class="content">
+      <div class="todo">
+        <div class="ix">1</div>
+        <div>
+          <h3>澄清问题 2 条待裁决<span class="flag">需书面</span></h3>
+          <p>「付款方式」与合同专用条款口径不一致；磋商保证金金额未载明。建议本周内向招标方书面提出，答复后回填裁决。</p>
+          <a class="act" href="#">查看原文 →</a>
+        </div>
+      </div>
+      <div class="todo">
+        <div class="ix">2</div>
+        <div>
+          <h3>项目团队人数待拍板</h3>
+          <p>评分要求团队不少于 6 人。未拍板前，正文不会写入任何人数。</p>
+          <a class="act" href="#">去拍板 →</a>
+        </div>
+      </div>
+      <div class="todo">
+        <div class="ix">3</div>
+        <div>
+          <h3>数据治理方案 10 分没有响应章节</h3>
+          <p>目录树中不存在对应节点。合册前不补，这 10 分直接丢失。</p>
+          <a class="act" href="#">去安排 →</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="label">
+      <span class="no">02</span>
+      评分办法
+      <span class="note">合计 100 分，已覆盖 90 分。</span>
+      <span class="note bad">缺口 10 分，见数据治理方案。</span>
+    </div>
+    <div class="content">
+      <table class="score">
+        <thead><tr><th>评分项</th><th class="num">分值</th><th>响应章节</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td class="cat">商务分</td><td class="num">30</td><td>第一章 商务响应</td><td><span class="state">已安排</span></td></tr>
+          <tr class="sub"><td class="cat">总体技术方案</td><td class="num">15</td><td>2.1 总体技术方案</td><td><span class="state">已安排</span></td></tr>
+          <tr class="gap"><td class="cat" style="padding-left:16px">数据治理方案</td><td class="num">10</td><td class="miss">尚未安排</td><td><span class="state bad">待处理</span></td></tr>
+          <tr class="sub"><td class="cat">实施与运维方案</td><td class="num">20</td><td>2.3 实施与运维方案</td><td><span class="state">已安排</span></td></tr>
+          <tr><td class="cat">价格分</td><td class="num">25</td><td>第一章 商务响应 · 报价表</td><td><span class="state">已安排</span></td></tr>
+        </tbody>
+        <tfoot><tr><td colspan="4">技术分小计 45 分，其中 35 分已落章节。</td></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="label">
+      <span class="no">03</span>
+      废标条款
+      <span class="note">两条均为响应无效。</span>
+    </div>
+    <div class="content">
+      <div class="disq">
+        <div class="item">
+          <div class="q">未按要求提交磋商保证金</div>
+          <div class="meta">第二章 供应商须知 2.4 · 后果：<em>响应文件无效</em></div>
+        </div>
+        <div class="item">
+          <div class="q">技术方案未逐条响应带★条款</div>
+          <div class="meta">第三章 评审办法 3.1 · 后果：<em>响应文件无效</em></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="label">
+      <span class="no">04</span>
+      目录与承诺
+      <span class="note">46 节已建，0 节已写。</span>
+    </div>
+    <div class="content">
+      <div class="tree">
+        <div class="tnode"><span class="no">第二章</span><span class="nm">技术方案</span><span class="badge req">REQ</span></div>
+        <div class="tnode lv2"><span class="no">2.1</span><span class="nm">总体技术方案</span><span class="badge req">REQ</span></div>
+        <div class="tnode lv2 missing"><span class="no">2.2</span><span class="nm">数据治理方案（未建）</span><span class="badge score">SCORE 10</span></div>
+        <div class="tnode lv2"><span class="no">2.3</span><span class="nm">实施与运维方案</span><span class="badge req">REQ</span></div>
+      </div>
+
+      <div class="sub-h">关键承诺</div>
+      <div class="promise">
+        <div class="row"><span class="k">项目团队人数</span><span class="v">8 人</span><span class="s wait">待拍板</span></div>
+        <div class="row"><span class="k">总工期</span><span class="v">90 日历天</span><span class="s">已确认</span></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span>演示数据，仅用于视觉方向比较，非真实项目数据。</span>
+    <span class="spacer"></span>
+    <span>方向 D · 编辑杂志风</span>
+  </footer>
+
+</main>
+</body>
+</html>

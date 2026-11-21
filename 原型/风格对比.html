@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN" data-zcode-design>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>评审台视觉方向 · 四种风格对比</title>
+<style>
+:root{
+  --bg:#F4F4F2; --surface:#FFFFFF; --fg:#17191C; --muted:#63676D; --faint:#9A9DA2;
+  --border:#DFDFDB; --border-strong:#C4C4BE;
+  --accent:#0F766E; --focus-ring:#0F766E55;
+  --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --motion:.15s ease;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+:where(a,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.wrap{max-width:1400px;margin:0 auto;padding:0 40px 56px}
+
+.head{padding:56px 0 28px;border-bottom:1px solid var(--border-strong);display:block}
+.head-top{display:flex;align-items:baseline;gap:16px;margin-bottom:14px}
+.head .eyebrow{margin:0;font-size:11px;letter-spacing:.2em;color:var(--muted)}
+.head h1{margin:0;font-size:26px;font-weight:600;letter-spacing:.01em;line-height:1.4}
+.head p{margin:8px 0 0;font-size:13px;color:var(--muted);max-width:62ch}
+.head .meta{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.04em;white-space:nowrap}
+
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px;margin-top:32px}
+.item{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.item-h{display:flex;align-items:baseline;gap:12px;padding:16px 18px 4px}
+.item-h .ix{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.item-h h2{margin:0;font-size:15px;font-weight:600;letter-spacing:.01em}
+.item-h .open{margin-left:auto;font-size:12px;color:var(--muted);border-bottom:1px solid transparent;padding-bottom:1px}
+.item-h .open:hover{color:var(--fg);border-bottom-color:var(--border-strong)}
+.item .desc{margin:2px 18px 14px;font-size:12px;color:var(--muted);line-height:1.6}
+.frame{position:relative;width:100%;aspect-ratio:1440/960;border-top:1px solid var(--border);overflow:hidden;background:var(--surface)}
+.frame iframe{position:absolute;top:0;left:0;width:1440px;height:960px;border:0;transform-origin:top left}
+.frame .hit{position:absolute;inset:0;z-index:2}
+.frame .hit:hover{box-shadow:inset 0 0 0 2px var(--focus-ring)}
+
+.note{margin-top:32px;padding-top:16px;border-top:1px solid var(--border);display:flex;gap:12px;font-size:11px;color:var(--faint);letter-spacing:.03em}
+.note .spacer{flex:1}
+
+@media (max-width:1180px){
+  .grid{grid-template-columns:1fr}
+  .wrap{padding:0 24px 40px}
+}
+@media (max-width:640px){
+  .wrap{padding:0 16px 32px}
+  .head{padding:36px 0 20px}
+  .head h1{font-size:21px}
+  .frame{aspect-ratio:4/3}
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+
+  <header class="head">
+    <div class="head-top">
+      <p class="eyebrow">视觉方向对比 · 评审台</p>
+      <span class="meta">2026-11-21 · 演示数据</span>
+    </div>
+    <h1 id="title">同一份内容，四种视觉语言</h1>
+    <p>四个页面用同一批数据与组件：顶栏、分区、待确认队列、评分表、废标条款、目录与承诺。只有字体、颜色、密度和结构语法不同。点任一预览在新标签页打开完整页面。</p>
+  </header>
+
+  <div class="grid">
+
+    <article class="item">
+      <div class="item-h">
+        <span class="ix">A</span>
+        <h2>纸感公文体</h2>
+        <a class="open" href="方向A-纸感公文体/评审台-方向A.html" target="_blank" rel="noopener">打开 →</a>
+      </div>
+      <p class="desc">暖白纸面、宋体标题、细线分栏、零阴影。和递交的 Word 同族，正式、可信；密度中等，控件仍是无衬线。</p>
+      <div class="frame">
+        <iframe src="方向A-纸感公文体/评审台-方向A.html" title="方向A 纸感公文体预览" scrolling="no" tabindex="-1" aria-hidden="true"></iframe>
+        <a class="hit" href="方向A-纸感公文体/评审台-方向A.html" target="_blank" rel="noopener" aria-label="打开方向A 纸感公文体"></a>
+      </div>
+    </article>
+
+    <article class="item">
+      <div class="item-h">
+        <span class="ix">B</span>
+        <h2>精炼工具风</h2>
+        <a class="open" href="方向B-精炼工具风/评审台-方向B.html" target="_blank" rel="noopener">打开 →</a>
+      </div>
+      <p class="desc">保留现有的青绿与白卡骨架，把层级收紧：一条顶栏、一张主决策卡、右侧状态栏。改动最小、风险最低。</p>
+      <div class="frame">
+        <iframe src="方向B-精炼工具风/评审台-方向B.html" title="方向B 精炼工具风预览" scrolling="no" tabindex="-1" aria-hidden="true"></iframe>
+        <a class="hit" href="方向B-精炼工具风/评审台-方向B.html" target="_blank" rel="noopener" aria-label="打开方向B 精炼工具风"></a>
+      </div>
+    </article>
+
+    <article class="item">
+      <div class="item-h">
+        <span class="ix">C</span>
+        <h2>控制台风</h2>
+        <a class="open" href="方向C-控制台风/评审台-方向C.html" target="_blank" rel="noopener">打开 →</a>
+      </div>
+      <p class="desc">深色壳、等高行、等宽数字。先看指标、再看队列、最后看明细；扫读最快，但离正式递交文档的气质最远。</p>
+      <div class="frame">
+        <iframe src="方向C-控制台风/评审台-方向C.html" title="方向C 控制台风预览" scrolling="no" tabindex="-1" aria-hidden="true"></iframe>
+        <a class="hit" href="方向C-控制台风/评审台-方向C.html" target="_blank" rel="noopener" aria-label="打开方向C 控制台风"></a>
+      </div>
+    </article>
+
+    <article class="item">
+      <div class="item-h">
+        <span class="ix">D</span>
+        <h2>编辑杂志风</h2>
+        <a class="open" href="方向D-编辑杂志风/评审台-方向D.html" target="_blank" rel="noopener">打开 →</a>
+      </div>
+      <p class="desc">大标题、左栏编号、单栏正文、克制的青绿。阅读与汇报最舒服，但装树、表格和拖拽时会偏慢。</p>
+      <div class="frame">
+        <iframe src="方向D-编辑杂志风/评审台-方向D.html" title="方向D 编辑杂志风预览" scrolling="no" tabindex="-1" aria-hidden="true"></iframe>
+        <a class="hit" href="方向D-编辑杂志风/评审台-方向D.html" target="_blank" rel="noopener" aria-label="打开方向D 编辑杂志风"></a>
+      </div>
+    </article>
+
+  </div>
+
+  <footer class="note">
+    <span>演示数据，仅用于视觉方向比较，非真实项目数据。</span>
+    <span class="spacer"></span>
+    <span>建议：先看 A 与 B，再决定是否接受 C 或 D 的气质代价。</span>
+  </footer>
+
+</main>
+<script>
+  // 预览按容器实际宽度缩放，避免 1440 宽的页面被裁切
+  (function () {
+    function fit() {
+      document.querySelectorAll('.frame').forEach(function (f) {
+        var s = f.clientWidth / 1440;
+        var i = f.querySelector('iframe');
+        if (i) i.style.transform = 'scale(' + s + ')';
+      });
+    }
+    window.addEventListener('resize', fit);
+    fit();
+  })();
+</script>
+</body>
+</html>
