@@ -436,6 +436,8 @@ def validate_guide_entry(e: dict, expected_keys: set[str]) -> str | None:
         return f"模式非法：{mode}（合法：素材修订/格式跟随/推理撰写，可 + 组合，或 —）"
     material = str(e.get("material", "")).strip()
     if material and material not in ("—", "【缺】"):
+        if re.search(r"\.docx\s+L\d+(?:-L?\d+)?\s*、", material):
+            return f"素材列多个区间用中文逗号分隔（顿号是图示列的分隔符）：{material}"
         for tok in [t.strip() for t in material.split("，") if t.strip()]:
             if not MATERIAL_TOKEN.match(tok):
                 return f"素材记法非法：{tok}（应为「文件.docx L120-L260」，多个用中文逗号分隔，或 —/【缺】）"

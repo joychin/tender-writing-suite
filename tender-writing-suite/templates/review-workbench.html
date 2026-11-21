@@ -956,10 +956,11 @@ function renderGuideDetail() {
     const err = document.createElement("div"); err.className = "ferr"; err.hidden = true;
     inp.oninput = () => {
       const v = inp.value.trim();
-      let bad = false;
-      if (v && v !== "—" && v !== "【缺】") for (const tok of v.split("，")) if (!/^.+\.docx\s+L\d+(-L?\d+)?$/.test(tok.trim())) bad = true;
+      const sepBad = v && /\.docx\s+L\d+(?:-L?\d+)?\s*、/.test(v);
+      let bad = sepBad;
+      if (!bad && v && v !== "—" && v !== "【缺】") for (const tok of v.split("，")) if (!/^.+\.docx\s+L\d+(-L?\d+)?$/.test(tok.trim())) bad = true;
       inp.classList.toggle("bad", bad); err.hidden = !bad;
-      err.textContent = bad ? "素材记法：文件.docx L120-L260（行号区间来自解析结果）" : "";
+      err.textContent = bad ? (sepBad ? "多个素材区间用中文逗号「，」分隔——顿号是图示列的分隔符" : "素材记法：文件.docx L120-L260（行号区间来自解析结果）") : "";
       if (!bad) setGuideField(key, "material", v);
     };
     mat.appendChild(inp); mat.appendChild(err);
@@ -1088,6 +1089,10 @@ function renderPromises() {
         inp.classList.toggle("bad", bad); err.hidden = !bad;
         err.textContent = bad ? "值列要写可独立检索的裸值（人名、数字、期限）；解释放说明列" : "";
         if (!bad) { S.promiseDirty[p.item] = S.promiseDirty[p.item] || {}; S.promiseDirty[p.item].value = inp.value; refreshSaveStates(); draftSoon(); }
+        const filledNow = inp.value && !/待补|待定|待确认/.test(inp.value);
+        card.className = "promise " + (filledNow ? "filled" : "pending");
+        card.querySelector(".st").textContent = filledNow ? "✓ 已拍板" : "待你拍板";
+        renderKpis();
       };
       c2.appendChild(inp); c2.appendChild(err);
       const ninp = document.createElement("input"); ninp.type = "text"; ninp.value = note; ninp.placeholder = "备注（可选）"; ninp.style.marginTop = "6px";

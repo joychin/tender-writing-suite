@@ -175,15 +175,19 @@ def check_guide(work: Path) -> tuple[list[str], list[str]]:
                 m in {"素材修订", "格式跟随", "推理撰写"} for m in mode.split("+")):
             issues.append(f"「{key}」模式非法：{mode}（素材修订/格式跟随/推理撰写，可 + 组合；非正文节点写 —）")
         if material and material != "—":
-            for tok in [t.strip() for t in material.split("，") if t.strip()]:
-                m = MATERIAL_TOKEN.match(tok)
-                if tok == "【缺】":
-                    continue
-                if not m:
-                    issues.append(f"「{key}」素材列记法非法：{tok}（应为 素材文件.docx L120-L260 / 【缺】 / —）")
-                    continue
-                use_key = f"{_base_name(m.group(1))}:L{m.group(2)}-L{m.group(3) or m.group(2)}"
-                material_use.setdefault(use_key, []).append(key)
+            if re.search(r"\.docx\s+L\d+(?:-L?\d+)?\s*、", material):
+                # 完整 token 后跟顿号 = 拿顿号当分隔符；文件名内含顿号（顿号在 .docx 前）不受影响
+                issues.append(f"「{key}」素材列多个区间用中文逗号分隔（顿号是图示列的分隔符）：{material}")
+            else:
+                for tok in [t.strip() for t in material.split("，") if t.strip()]:
+                    m = MATERIAL_TOKEN.match(tok)
+                    if tok == "【缺】":
+                        continue
+                    if not m:
+                        issues.append(f"「{key}」素材列记法非法：{tok}（应为 素材文件.docx L120-L260 / 【缺】 / —）")
+                        continue
+                    use_key = f"{_base_name(m.group(1))}:L{m.group(2)}-L{m.group(3) or m.group(2)}"
+                    material_use.setdefault(use_key, []).append(key)
         if figure and figure != "—":
             for tok in [t.strip() for t in figure.split("、") if t.strip()]:
                 kind = tok.split(":", 1)[0]
