@@ -362,7 +362,7 @@ def merge_table(work: Path, relpath: str, header: list[str], fieldmap: dict[str,
             else:
                 errors.append(f"{label}「{key}」：行不存在，无法删除")
             continue
-        if key in index:
+        if key in index and data[index[key]] is not None:
             row = data[index[key]]
             for j, h in enumerate(header):
                 val = e.get(fieldmap[h])
@@ -370,9 +370,13 @@ def merge_table(work: Path, relpath: str, header: list[str], fieldmap: dict[str,
                     row[j] = _cell(val)
             report[f"{label}_updated"].append(key)
         else:
+            # 新行；同包「先删后建」时复用被删行的原位置
             row = [_cell(e.get(fieldmap[h], "—")) for h in header]
             row[0] = key
-            data.append(row)
+            if key in index and data[index[key]] is None:
+                data[index[key]] = row
+            else:
+                data.append(row)
             report[f"{label}_added"].append(key)
     data = [r for r in data if r is not None]
     report["written"].append(_save_table(work, relpath, text, header, data, counter,
@@ -588,6 +592,17 @@ def apply_patch(work: Path, patch: dict) -> dict:
         for vol in volumes:
             pre = f"{vol['name']}/" if len(volumes) > 1 else ""
             expected |= {pre + t for t, _d in _flatten(vol["roots"])}
+        # 同包树改名的旧键自动跟随（用户先改指引行、后改树名，一次保存两处都生效）
+        multi2 = len(volumes) > 1
+        rename_map = {}
+        for vol in volumes:
+            for oldk, newk in vol.get("_renames", []):
+                rename_map[f"{vol['name']}/{oldk}" if multi2 else oldk] = \
+                    f"{vol['name']}/{newk}" if multi2 else newk
+        for e in guide_patch:
+            k0 = str(e.get("key", "")).strip()
+            if k0 and k0 not in expected and k0 in rename_map:
+                e["key"] = rename_map[k0]
         for e in guide_patch:
             bad = validate_guide_entry(e, expected)
             if bad:
@@ -632,7 +647,15 @@ def apply_patch(work: Path, patch: dict) -> dict:
                                "已建节的旧名文件会在合册时按「目录外文件」点名")
     if any(g.startswith("G3") for g in report["gates"]) and (tree_patch or guide_patch):
         report["flags"].append("本次改动了目录或指引——G3/G4 已确认过的结论建议重新过一遍门")
-    return {"ok": True, "errors": [], **report}
+
+    def _fresh(relpath: str) -> str:
+        p2 = work / relpath
+        return _sha256(p2.read_text(encoding="utf-8")) if p2.is_file() else ""
+
+    # 新鲜基底 sha 随结果返回：页面合并后可连续多次保存，不再误判「基底不符」
+    base_now = {"outline": _fresh(OUTLINE_RELPATH), "guide": _fresh(GUIDE_RELPATH),
+                "promise": _fresh(PROMISE_RELPATH)}
+    return {"ok": True, "errors": [], "base": base_now, **report}
 
 
 def main() -> None:

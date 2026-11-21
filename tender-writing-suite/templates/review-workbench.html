@@ -320,7 +320,7 @@ const S = {
   guideDirty: {}, guideRemoved: {},            // key -> {field:val} / key -> true
   promiseEdit: false, promiseDirty: {},
   savedGuide: false, savedPromise: false,
-  online: ONLINE,
+  online: ONLINE, failCount: 0,
 };
 for (const v of DATA.volumes) {
   S.vol[v.name] = { nodes: reuid(v.nodes) };
@@ -334,6 +334,8 @@ function reuid(list, p = "") {
 }
 
 /* ================= 基础 UI ================= */
+function noteFail() { S.failCount = (S.failCount || 0) + 1; if (S.failCount >= 3) goOffline(); }
+function noteOk() { S.failCount = 0; }
 function toast(msg, err) {
   const t = document.createElement("div");
   t.className = "toast" + (err ? " err" : ""); t.textContent = msg;
@@ -1233,7 +1235,7 @@ function submitClar(clarItems, gateItem) {
       .then(r => r.json()).then(j => {
         if (j.ok) { S.lastSaved = new Date().toTimeString().slice(0, 5); toast(clarItems.length ? "裁决已记录" : "门确认已记录"); for (const c of clarItems) DATA.clar.verdicts[c.id] = { verdict: c.verdict, note: c.note, at: "刚刚" }; if (gateItem) DATA.decisions.gates.push({ ...gateItem, at: "刚刚" }); renderGates(); renderClar(); refreshSaveStates(); }
         else { setSaveState($("#savestate"), "error"); toast((j.errors || ["应用失败"]).join("；"), 1); }
-      }).catch(() => { setSaveState($("#savestate"), "error"); goOffline(); });
+      }).catch(() => { setSaveState($("#savestate"), "error"); noteFail(); });
   } else {
     for (const c of clarItems) DATA.clar.verdicts[c.id] = { ...c, at: "刚刚" };
     if (gateItem) DATA.decisions.gates.push({ ...gateItem, at: "刚刚" });
@@ -1269,6 +1271,12 @@ function saveAll(after) {
       if (j.ok) {
         for (const v of Object.keys(S.vol)) S.savedLogLen[v] = S.log[v].length;
         S.guideDirty = {}; S.guideRemoved = {}; S.promiseDirty = {};
+        if (j.base) for (const k of Object.keys(j.base)) if (j.base[k]) DATA.base[k] = j.base[k];
+        if (j.report && j.report.guide_key_migrated) for (const mv of j.report.guide_key_migrated) {
+          const [a, b] = mv.split(" → ");
+          const row = DATA.guide.rows.find(r => r.key === a);
+          if (row) row.key = b;
+        }
         S.lastSaved = new Date().toTimeString().slice(0, 5);
         els.forEach(e => e && setSaveState(e, "saved", S.lastSaved));
         showReport(j.report);
@@ -1278,7 +1286,7 @@ function saveAll(after) {
         els.forEach(e => e && setSaveState(e, "error"));
         if (j.stage === "base") showConflict(j.errors); else toast((j.errors || ["应用失败"]).join("；"), 1);
       }
-    }).catch(() => { saving = false; els.forEach(e => e && setSaveState(e, "error")); goOffline(); });
+    }).catch(() => { saving = false; els.forEach(e => e && setSaveState(e, "error")); noteFail(); });
 }
 function showReport(rep) {
   const mask = document.createElement("div"); mask.className = "mask";
@@ -1306,7 +1314,7 @@ function showConflict(errors) {
 }
 function goOffline() {
   if (!S.online) return;
-  S.online = false;
+  S.online = false; S.failCount = 0;
   const c = $("#conn"); c.textContent = "离线模式"; c.classList.add("off");
   const host = $("#ov-banner"); host.innerHTML = "";
   const b = document.createElement("div"); b.className = "banner danger";
@@ -1380,8 +1388,8 @@ function replayOp(volName, op) {
 function beat() {
   if (!ONLINE) { const c = $("#conn"); c.textContent = "离线模式（静态页面）"; c.classList.add("off"); return null; }
   const t = setInterval(() => {
-    fetch(API + "healthz").then(r => { if (!r.ok) throw 0; if (!S.online) { location.reload(); } })
-      .catch(() => goOffline());
+    fetch(API + "healthz").then(r => { if (!r.ok) throw 0; noteOk(); if (!S.online) { location.reload(); } })
+      .catch(() => noteFail());
   }, 5000);
   return t;
 }
@@ -1392,7 +1400,7 @@ function boot() {
   S.clar = {};
   if (!ONLINE) { const c = $("#conn"); c.textContent = "离线模式（静态页面）"; c.classList.add("off"); }
   else {
-    fetch(API + "healthz").then(r => r.json()).then(() => { $("#conn").textContent = "已连接 · 本地服务"; }).catch(() => goOffline());
+    fetch(API + "healthz").then(r => r.json()).then(() => { noteOk(); $("#conn").textContent = "已连接 · 本地服务"; }).catch(() => noteFail());
   }
   renderOverview(); renderKpis(); renderGates(); renderClar();
   renderVolumes(); refreshNumbering();

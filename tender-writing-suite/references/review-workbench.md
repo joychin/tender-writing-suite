@@ -41,7 +41,8 @@ python3 scripts/apply_review.py --patch 修改包.json --work work   # 助手代
   → 落盘 → 返回 diff 报告（新增/删除/改名/指引/承诺 + 下游旗标）；
 - **应用成功后必做**：重跑 `python3 scripts/check_writing.py --guide`；把 diff 报告的
   「下游注意」逐条向用户点名；被删节点的指引行与节文件清理、新叶子补指引行按提示
-  增量处理（对照 @references/outline-cleanup.md 的增量走查）；
+  增量处理（对照 @references/outline-cleanup.md 的增量走查）；**后续任何步骤引用
+  目录/指引/承诺前重读对应文件**（页面保存已直写落盘，会话内旧读数作废）；
 - 离线修改包走 CLI 应用时同样有基底校验与备份；用户没发修改包就继续，不催。
 
 ## 稳定性（向用户解释服务问题时用这套口径）
