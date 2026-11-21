@@ -233,7 +233,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
 <section class="panel active" id="panel-overview">
   <div id="ov-banner"></div>
   <div class="kpis" id="kpis"></div>
-  <div class="card"><h3>确认门进度 <span class="sub">连续模式下由助手越门汇报，你可在此补确认</span></h3><div class="gate-row" id="gates"></div></div>
+  <div class="card"><h3>确认门进度 <span class="sub">每道门停轮呈现一次；你未明确确认时助手按默认方案推进并以批注标注，不反复追问</span></h3><div class="gate-row" id="gates"></div></div>
   <div class="card"><h3>解析概况 <span class="sub" id="parse-sub"></span></h3><div class="parse-grid" id="parse"></div></div>
   <div class="card"><h3>评分项与覆盖 <span class="sub" id="score-sub"></span></h3><div id="scores"></div></div>
   <div class="card"><h3>废标条款 <span class="sub" id="disq-sub"></span></h3><div id="disq"></div></div>
@@ -1080,7 +1080,7 @@ function renderPromises() {
     c1.innerHTML = `<div class="ct">说明 / 依据</div><div class="small">${esc(note || "—")}</div>`;
     body.appendChild(c1);
     const c2 = document.createElement("div"); c2.className = "col";
-    c2.innerHTML = `<div class="ct">你的决定${promiseFilled(p) ? "" : "（承诺清单里的值会逐处写进正文，拍板前不写任何正文）"}</div>`;
+    c2.innerHTML = `<div class="ct">你的决定${promiseFilled(p) ? "" : "（未拍板的值以批注标注，不会写进正文）"}</div>`;
     if (S.promiseEdit) {
       const inp = document.createElement("input"); inp.type = "text"; inp.value = val;
       const err = document.createElement("div"); err.className = "ferr"; err.hidden = true;
@@ -1157,10 +1157,10 @@ function renderGates() {
   for (const [g, label] of GATES) {
     const st = latest[g];
     const d = document.createElement("div"); d.className = "gate" + (st && st.verdict === "pass" ? " pass" : "");
-    d.innerHTML = `<b>${g}</b> ${label} <span class="st">${st ? (st.verdict === "pass" ? "✓ 已确认" + (st.at ? " · " + esc(st.at) : "") : esc(st.verdict)) : "未到"}</span>`;
+    d.innerHTML = `<b>${g}</b> ${label} <span class="st">${st ? (st.verdict === "pass" ? "✓ 已确认" + (st.at ? " · " + esc(st.at) : "") : esc(st.verdict)) : "待确认"}</span>`;
     if (!st || st.verdict !== "pass") {
       const b = document.createElement("button"); b.className = "btn sm"; b.textContent = "标记通过";
-      b.title = "确认此门通过（记录进确认台账；G5 承诺拍板不受免检影响）";
+      b.title = "确认此门通过（记录进确认台账；未确认时助手按默认方案先行）";
       b.onclick = () => submitClar([], { gate: g, verdict: "pass", note: "" });
       d.appendChild(b);
     }
