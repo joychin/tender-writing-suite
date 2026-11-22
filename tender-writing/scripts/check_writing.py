@@ -42,10 +42,26 @@ def _sibling_scripts(name: str) -> Path:
 
 _DOCX_SCRIPTS = _sibling_scripts("tender-docx")
 sys.path.append(str(_DOCX_SCRIPTS))
-from docx_toolkit import build_tree, iter_blocks, parse_outline, sanitize_name  # noqa: E402
+from docx_toolkit import (  # noqa: E402
+    build_tree, iter_blocks, parse_outline, require_docx, sanitize_name,
+)
 
-from docx import Document  # noqa: E402
-from docx.oxml.ns import qn  # noqa: E402
+# python-docx 惰性加载：顶层 import 会让未装依赖的环境（沙箱评测、纯净解释器）
+# 在启动第一步就崩，--help 都出不来。用到 docx 符号的函数经 _load_docx() 取。
+Document = None  # type: ignore[assignment]
+qn = None
+
+
+def _load_docx() -> None:
+    """幂等加载 python-docx 到本模块全局（缺依赖由 require_docx 给中文提示后退出）。"""
+    global Document, qn
+    if Document is not None:
+        return
+    require_docx()
+    import docx as _docx
+    from docx.oxml.ns import qn as _qn
+    Document, qn = _docx.Document, _qn
+
 
 PLACEHOLDER = re.compile(r"【\s*(待补|待澄清|待确认|待补充|待定|待核验)[^】]*】|TODO|FIXME")
 MD_RESIDUE = re.compile(r"^(#{1,6}\s|\||\*\*|```)")
@@ -911,6 +927,7 @@ def main() -> None:
     ap.add_argument("--json", default="", help="结果落盘 JSON（写作进度面板读它展示；"
                     "推荐 work/review/check-result.json，控制台输出与退出码不变）")
     args = ap.parse_args()
+    _load_docx()  # --help 已在 parse_args 内退出；本命令全部校验都读 docx
     work = Path(args.work)
 
     if args.guide:

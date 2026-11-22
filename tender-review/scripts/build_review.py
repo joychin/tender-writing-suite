@@ -46,7 +46,7 @@ for _sib in ("tender-writing", "tender-docx"):
 from apply_review import GUIDE_RELPATH, OUTLINE_RELPATH, PROMISE_RELPATH, _sha256, _volumes
 from check_writing import (ID_RE, _parse_annotations, _read, _registry_payload,
                            _resolve_source, _split_tables, table_rows)
-from docx_toolkit import sanitize_name
+from docx_toolkit import require_docx, sanitize_name
 
 TEMPLATE = Path(__file__).parent.parent / "templates" / "review-workbench.html"
 REPORT_TEMPLATE = Path(__file__).parent.parent / "templates" / "analysis-report.html"
@@ -427,17 +427,25 @@ def _comments_scan(work: Path) -> list[dict]:
 
     取数路径照 docx_toolkit.read_comments/doc_comments（rels → comments part），
     另取锚定段落文本（段落内 commentReference 对 id，照 cmd_read 的扫描写法）。
-    逐文件 try/except：坏文件跳过不拖垮整页。"""
-    import docx
-    from docx.oxml.ns import qn
+    逐文件 try/except：坏文件跳过不拖垮整页。
 
+    python-docx 惰性加载：没有节文件时无需扫也无需依赖（纯 md 也能出评审台页）；
+    真有节文件却缺依赖时走 require_docx 的中文可执行提示，不静默漏报批注。"""
     out = []
     body = work / "body"
     if not body.is_dir():
         return out
-    for path in sorted(body.rglob("*.docx")):
-        if path.stem.startswith("整本-") or path.name.startswith("~$"):
-            continue
+    cands = [p for p in sorted(body.rglob("*.docx"))
+             if not (p.stem.startswith("整本-") or p.name.startswith("~$"))]
+    if not cands:
+        return out
+    try:
+        import docx
+        from docx.oxml.ns import qn
+    except ImportError:
+        require_docx()
+        return out
+    for path in cands:
         try:
             doc = docx.Document(str(path))
             cmap = {}

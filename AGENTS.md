@@ -20,7 +20,7 @@
 ## 常用命令
 
 ```bash
-python3 listing/self_check.py        # 改动技能包后必跑：frontmatter/YAML/逐技能 token 闸/跨技能引用存在性/沿革从句门
+python3 listing/self_check.py        # 改动技能包后必跑：frontmatter/YAML/逐技能 token 闸/跨技能引用存在性/沿革从句门/缺依赖冒烟
 python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-writing-suite-<version>.zip（唯一单包）
 python3 testruns/fp_smoke.py         # 评审台产物指纹链路冒烟（A1–A8）
 python3 testruns/fp_e2e_cli.py       # 评审台 CLI 级全面断言（B1–B8，含 fp_smoke 12 例复跑）
@@ -41,6 +41,12 @@ python3 testruns/fp_e2e_cli.py       # 评审台 CLI 级全面断言（B1–B8�
   顶部追加一行版本史。
 - **结构纪律**：红线必须置顶（长会话压缩只保留文件开头）；路由表指向的环节技能与
   `@<技能>/references/*.md`、`<技能>/scripts/*.py` 引用必须真实存在（self_check 校验）。
+- **第三方依赖惰性加载**：脚本顶层不得 `import python-docx`（及 pypdfium2/PIL 同族）——
+  沙箱评测、纯净解释器、别人的电脑里启动第一步就 `ModuleNotFoundError`，平台据此判
+  「文件质量检测不通过」。经 `docx_toolkit.require_docx()` 在 `parse_args()` 之后加载，
+  缺失时打印中文安装提示并以退出码 2 退出（不抛 traceback）。开发机装了依赖，本地
+  `--help` 永远看不出这个问题——所以 self_check 的 `no_dep_smoke` 用 `python3 -S`
+  （不加载 site-packages）守着这条维度。
 
 ## 架构与编码约定
 
@@ -58,7 +64,8 @@ python3 testruns/fp_e2e_cli.py       # 评审台 CLI 级全面断言（B1–B8�
 ## 发版流程（每次发版全跑）
 
 1. 改动五个技能目录 → `python3 listing/self_check.py` 全绿
-2. 八脚本 `--help` 冒烟 OK（平级形态）
+2. 八脚本 `--help` 冒烟 OK（平级形态）；缺依赖维度已由 self_check 的 `python3 -S`
+   冒烟覆盖（装机有 deps 的本机 `--help` 看不见这条）
 3. 涉及评审台/产物页面 → fp 两电池全绿
 4. `python3 listing/build_package.py` 重打包（版本号已递增），
    可在 `out-zips/build/` 人工检查装配树、在单包形态下复跑脚本 `--help`

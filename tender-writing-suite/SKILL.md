@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Check this tender document for disqualification risks"
   - "What materials do I need to prepare for this bid?"
-version: 2.1.3
+version: 2.1.5
 author: 灵燕智能
 ---
 
@@ -115,6 +115,9 @@ work/
 
 ## 环境与模板
 
+本技能要在本机跑 Python 处理 Word，**首次使用先确认依赖**——缺了先主动告知安装
+命令并等用户装完，不要等工具报错才说（依赖属于必须提前告知的使用条件）：
+
 ```bash
 pip install python-docx pypdfium2 docxcompose Pillow
 ```
@@ -122,6 +125,9 @@ pip install python-docx pypdfium2 docxcompose Pillow
 python-docx ≥1.0；EMF/WMF 矢量图拷不进（工具告警跳过），需图处先 `render-page`
 转 PNG 再 `image` 插入。版式模板在 `tender-docx/templates/base-template.docx`
 （需重建时跑 `tender-docx/scripts/make_template.py`）。
+
+依赖未装齐时脚本以退出码 2 打印同一条安装提示（不抛 traceback）：解析、目录、
+评审台页面这些纯 md 环节照样能跑，正文校验与合册必须有 python-docx。
 
 ## 技能间交接
 

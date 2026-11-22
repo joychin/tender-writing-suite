@@ -26,13 +26,20 @@ import re
 import sys
 from pathlib import Path
 
-from docx import Document
-from docx.enum.section import WD_ORIENT
-from docx.enum.style import WD_STYLE_TYPE
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.shared import Cm, Pt
+# 第三方依赖惰性加载：顶层不 import python-docx，缺依赖时本模块仍可导入、
+# 八个脚本的 --help 仍可用；真正要用 Word 能力时才由 require_docx() 加载并给出
+# 可执行的中文提示。顶层 import 会让未装依赖的环境（沙箱评测、纯净解释器、
+# 别人的电脑）在启动第一步就 ModuleNotFoundError 崩掉。
+Document = None  # type: ignore[assignment]
+WD_ORIENT = WD_STYLE_TYPE = WD_ALIGN_PARAGRAPH = None
+OxmlElement = qn = None
+Cm = Pt = None
+DEP_INSTALL_HINT = (
+    "缺依赖：python-docx 未安装（import docx 失败）。\n"
+    "本技能的 Word 读写都要用它，请先在本机装一次：\n"
+    "    pip install python-docx pypdfium2 docxcompose Pillow\n"
+    "这是本地安装，脚本自身零网络请求；pip 走不通时请换企业/系统镜像源重试。"
+)
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -47,6 +54,27 @@ ILLEGAL = re.compile(r'[/\\:*?"<>|\n\r]')
 def die(msg: str, code: int = 1):
     print(f"[失败] {msg}")
     sys.exit(code)
+
+
+def require_docx() -> None:
+    """加载 python-docx 及其子模块（幂等）；缺失时给可执行提示后退出，不抛 traceback。"""
+    global Document, WD_ORIENT, WD_STYLE_TYPE, WD_ALIGN_PARAGRAPH
+    global OxmlElement, qn, Cm, Pt
+    if Document is not None:
+        return
+    try:
+        from docx import Document as _Document
+        from docx.enum.section import WD_ORIENT as _WD_ORIENT
+        from docx.enum.style import WD_STYLE_TYPE as _WD_STYLE_TYPE
+        from docx.enum.text import WD_ALIGN_PARAGRAPH as _WD_ALIGN_PARAGRAPH
+        from docx.oxml import OxmlElement as _OxmlElement
+        from docx.oxml.ns import qn as _qn
+        from docx.shared import Cm as _Cm, Pt as _Pt
+    except ImportError:
+        die(DEP_INSTALL_HINT, 2)
+    Document, WD_ORIENT = _Document, _WD_ORIENT
+    WD_STYLE_TYPE, WD_ALIGN_PARAGRAPH = _WD_STYLE_TYPE, _WD_ALIGN_PARAGRAPH
+    OxmlElement, qn, Cm, Pt = _OxmlElement, _qn, _Cm, _Pt
 
 
 def _build_review_cmd(work: Path) -> str:
@@ -2702,6 +2730,7 @@ def main() -> None:
     sp.set_defaults(func=cmd_assemble)
 
     args = ap.parse_args()
+    require_docx()  # --help 已在 parse_args 内退出，这里才真正需要 python-docx
     if args.cmd in ("create", "revise", "comment", "image", "copy-from"):
         _body_write_gate(getattr(args, "target", None) or getattr(args, "path", None))
     try:

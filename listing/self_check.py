@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -86,6 +87,41 @@ def token_count(body: str) -> tuple[int, str]:
     return len(tiktoken.get_encoding("cl100k_base").encode(body)), "实测"
 
 
+DEP_HINT_MARK = "pip install python-docx"
+
+
+def no_dep_smoke() -> list[str]:
+    """缺依赖冒烟：用不加载 site-packages 的解释器（-S）跑每个脚本的 --help。
+
+    开发机都装了 python-docx，本地冒烟永远看不见「没装依赖」这种环境——
+    沙箱评测/纯净解释器/别人的电脑里，顶层 import 会让脚本启动第一步就崩，
+    平台据此判「文件质量检测不通过」。所以这条必须在零第三方库条件下过：
+    ① 每个脚本 --help 必须成功；② 真需要 Word 能力的脚本须给人话提示而非 traceback。
+    """
+    problems: list[str] = []
+    scripts = sorted(ROOT.glob("*/scripts/*.py"))
+    for script in scripts:
+        r = subprocess.run([sys.executable, "-S", str(script), "--help"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            tail = (r.stderr or r.stdout).strip().splitlines()
+            problems.append(f"{script.relative_to(ROOT)}: 缺依赖时 --help 失败——"
+                            f"{tail[-1] if tail else '(无输出)'}")
+    toolkit = ROOT / "tender-docx" / "scripts" / "docx_toolkit.py"
+    if toolkit.is_file():
+        r = subprocess.run([sys.executable, "-S", str(toolkit), "read", "缺依赖探测.docx"],
+                           capture_output=True, text=True, timeout=120)
+        out = r.stdout + r.stderr
+        if DEP_HINT_MARK not in out:
+            problems.append("docx_toolkit.py: 缺依赖时未给出安装提示（应打印 "
+                            f"「{DEP_HINT_MARK} …」而非 traceback）")
+        elif "Traceback" in out:
+            problems.append("docx_toolkit.py: 缺依赖时仍抛 traceback（应只给可执行提示）")
+    print(f"  缺依赖冒烟：{len(scripts)} 个脚本 --help"
+          f"（{sys.executable.split('/')[-1]} -S）")
+    return problems
+
+
 def check(pkg: Path) -> list[str]:
     problems: list[str] = []
     skill = pkg / "SKILL.md"
@@ -146,6 +182,7 @@ def main() -> None:
     if len(set(versions.values())) > 1:
         detail = "、".join(f"{k}={v}" for k, v in sorted(versions.items()))
         problems.append(f"SKILL.md 版本不一致：{detail}——同步递增后再打包")
+    problems += no_dep_smoke()
     if problems:
         print(f"\n[自检未通过] {len(problems)} 处：")
         for p in problems:

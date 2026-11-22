@@ -12,10 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from docx_toolkit import enable_footer_pagenum, setup_styles  # noqa: E402
-
-from docx import Document  # noqa: E402
-from docx.shared import Cm  # noqa: E402
+from docx_toolkit import enable_footer_pagenum, require_docx, setup_styles  # noqa: E402
 
 
 def main() -> None:
@@ -24,6 +21,10 @@ def main() -> None:
     argparse.ArgumentParser(
         description="生成内置基准版式模板 templates/base-template.docx（改版式=改 docx_toolkit setup_styles 后重跑）"
     ).parse_args()
+    require_docx()  # --help 已在 parse_args 内退出；顶层 import 会让缺依赖环境起不来
+    from docx import Document
+    from docx.shared import Cm
+
     doc = Document()
     setup_styles(doc)
     sec = doc.sections[0]
