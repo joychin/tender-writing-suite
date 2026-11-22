@@ -49,6 +49,42 @@ def die(msg: str, code: int = 1):
     sys.exit(code)
 
 
+def _build_review_cmd(work: Path) -> str:
+    """可复制运行的 build_review.py 真实路径（五技能平级形态或单包扁平
+    scripts/ 同目录，两种安装形态都可覆盖；兜底按部件拼装）。"""
+    self_scripts = Path(__file__).resolve().parent
+    for cand in (self_scripts.parent.parent / "tender-review" / "scripts" / "build_review.py",
+                 self_scripts / "build_review.py"):
+        if cand.is_file():
+            return f"python3 {cand} --work {work}"
+    return f"python3 {Path('tender-review', 'scripts', 'build_review.py')} --work {work}"
+
+
+def _body_write_gate(target) -> None:
+    """第五步写节前置硬闸：body/ 下的节 docx 首次写入前，写作进度面板必须已首开
+    （build_review.py --open-progress 落 work/review/.progress-opened 标记）——
+    监视面倒置为事后交付物是真机事故（26 节写完链接才首次出现），措辞层拦不住，
+    闸挂在写节必经通道上。评审台也不存在时按红线「评审台未首建禁建节」拦：
+    回 G3 补门，--open-progress 不替代门。整本-*.docx（合册产物）与非 body/
+    路径（素材件、模板）不受此闸。"""
+    if not target:
+        return
+    t = Path(target)
+    body_dir = next((p for p in t.parents if p.name == "body"), None)
+    if body_dir is None or t.stem.startswith("整本-"):
+        return
+    review = body_dir.parent / "review"
+    if not (review / "评审台.html").is_file():
+        print("[写节被拦] 评审台未首建禁建节（入口红线）——回入口技能补 G3："
+              "目录确认 → 首建评审台 → 发链接 → 停轮，再进第五步。")
+        sys.exit(2)
+    if not (review / ".progress-opened").is_file():
+        print("[写节被拦] 写作进度面板未首开——监视面必须先给到用户，开写第一动作：\n"
+              f"  {_build_review_cmd(body_dir.parent)} --open-progress\n"
+              "把回显的面板链接以 Markdown 发给用户，再写节（标记落盘后放行，只拦首节前）。")
+        sys.exit(2)
+
+
 def sanitize_name(title: str) -> str:
     name = ILLEGAL.sub(" ", title)
     name = re.sub(r"\s+", " ", name).strip().lstrip(".")
@@ -1720,6 +1756,8 @@ def cmd_assemble(args) -> None:
         composer.save(str(out_path))
         print(f"[已合册] {out_path}（合并 {merged} 节，编号 {args.numbering}，"
               f"批注 {n_comments} 条待处理）")
+        print("  对用户口径：整本 Word 文档已生成（「合册」是内部动作，"
+              "不进对话、不作提问——reply-style 硬规则 9）。")
         for w in warnings:
             print(f"  ⚠️ {w}")
         warnings = []
@@ -2452,6 +2490,8 @@ def main() -> None:
     sp.set_defaults(func=cmd_assemble)
 
     args = ap.parse_args()
+    if args.cmd in ("create", "revise", "comment", "image", "copy-from"):
+        _body_write_gate(getattr(args, "target", None) or getattr(args, "path", None))
     try:
         args.func(args)
     except SystemExit:

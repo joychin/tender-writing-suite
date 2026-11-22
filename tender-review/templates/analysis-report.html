@@ -270,18 +270,29 @@ function outlineHTML(items) {
     if (!t || !(t.rows || []).length) return "";
     const h = t.header || [];
     const nameI = colOf(h, "名称"), partI = colOf(h, "归属"), extraI = colOf(h, "对应"), srcI = Math.max(colOf(h, "出处"), colOf(h, "线索"));
-    const widths = ["88px", "auto"];
-    if (partI >= 0) widths.push("104px");
-    if (extraI >= 0) widths.push("18%");
-    widths.push("26%");
+    // 列宽按表头逐列落位（长度恒等于表头列数）。登记表由分析现场写成，列形不受模板
+    // 控制（多一列说明/页码即变）；顺序 push 会在列数不合时丢 colgroup、表格跌回 auto
+    // 布局——叠加上下文 overflow-wrap:anywhere，名称列被压成一字一行、出处列独吃整行。
+    const widths = h.map((_, i) =>
+      i === 0 ? "88px"
+        : i === nameI ? "auto"
+        : i === partI ? "104px"
+        : i === extraI ? "18%"
+        : i === srcI ? "26%"
+        : "12%");
     return tableHTML(h.map((c, i) => i === 0 ? "编号" : c), t.rows, (r, i) => {
       const at = j => (j >= 0 && j < r.length ? r[j] : "");
       const id = `${idPrefix}-${String(i + 1).padStart(2, "0")}`;
-      const cells = [`<span class="tag ${tagCls}">${esc(id)}</span>`, `<b>${esc(at(nameI))}</b>`];
-      if (partI >= 0) cells.push(at(partI) ? `<span class="tag">${esc(BIDPART_ZH[at(partI)] || at(partI))}</span>` : "");
-      if (extraI >= 0) cells.push(esc(at(extraI)));
-      cells.push(`<span class="src">${esc(at(srcI))}</span>`);
-      return cells;
+      // 正文格与表头逐列对齐：已知角色列走专属渲染，未识别列原样出文本——
+      // 现场多写一列时不能只显示表头而正文空缺。
+      return h.map((_, j) => {
+        if (j === 0) return `<span class="tag ${tagCls}">${esc(id)}</span>`;
+        if (j === nameI) return `<b>${esc(at(nameI))}</b>`;
+        if (j === partI) return at(partI) ? `<span class="tag">${esc(BIDPART_ZH[at(partI)] || at(partI))}</span>` : "";
+        if (j === extraI) return esc(at(extraI));
+        if (j === srcI) return `<span class="src">${esc(at(srcI))}</span>`;
+        return esc(at(j));
+      });
     }, widths);
   };
   html += `<p class="sec-note" style="margin-top:18px">必须提供的章节（${fmt.mand && fmt.mand.rows ? fmt.mand.rows.length : 0} 项）</p>` + regTable(fmt.mand, "req", "MAND");

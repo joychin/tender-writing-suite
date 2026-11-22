@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document and list the disqualification risks"
   - "Turn the scoring criteria and eligibility thresholds into tables"
   - "Plan the bid response outline for this project"
-version: 2.0.2
+version: 2.1.2
 author: 灵燕智能
 ---
 
@@ -52,9 +52,12 @@ author: 灵燕智能
    `[解析转写待办]` → 按 @references/transcribe-scans.md 誊录后重跑（超页数上限
    先停轮确认）。主文件失败→说清原因停止；补充文件失败→声明降级不可引用。
    素材文件（历史标书/公司资料）为 docx 的也在此一并解析。
-3. **G1 门**：发现的待确认事项登记 `work/analysis/clarifications.md`（编号与第二
-   步续排）；生成分析报告（`python3 tender-review/scripts/build_review.py --work work --pages report`）
-   交付即停——概况与解析警示全量在报告，对话只留指针。
+3. **G1 门（异常门——仅异常时停轮）**：解析无警示且来源角色已决 → **不产报告
+   不停轮**，直接进第二步（解析概况并入 G2 的报告与指针交付）；有解析警示
+   （识别降级/可信度低/扫描件待誊录）或来源角色未决 → 待确认事项登记
+   `work/analysis/clarifications.md`（编号与第二步续排），生成分析报告
+   （`python3 tender-review/scripts/build_review.py --work work --pages report`）
+   交付即停——概况与警示全量在报告，对话只留指针。
 
 ## 第二步：要点提取
 
@@ -62,7 +65,9 @@ author: 灵燕智能
 @references/analysis-lite.md 产出四张登记表 + 废标全扫 + 澄清清单；收尾跑
 `python3 tender-writing/scripts/check_writing.py --analysis` 校验
 （coverage 与出处引用；`--work` 默认 `work`）。定位纪律：行号区间或关键词检索，**行号区间精读取证，
-禁止整读解析 md**。过 G2 门：刷新分析报告；关键要点（废标最严几条、评分框架、
+禁止整读解析 md**。过 G2 门：刷新分析报告（正常路径的首次报告交付——第一节
+概况表即解析结论）；对话指针开头带解析概况一句（主文件/规模/识别方式），关键
+要点（废标最严几条、评分框架、
 资格硬门槛）在对话给结论级摘要（只述事实与出处，不作商业评价），六张分析表与
 澄清清单全量只在报告；澄清处理用 `python3 tender-review/scripts/apply_review.py`
 记录；未处理项默认先行（批注标注）。追问本公司得分/资料缺口按家底确认纪律

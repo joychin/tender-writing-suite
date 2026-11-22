@@ -379,9 +379,18 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M")
 
 
+def _serve_base(work: Path) -> str:
+    """serve.json（{port,token,pid}）→ 评审台服务基址；服务未启动返回空串。"""
+    try:
+        sj = json.loads((work / "review" / "serve.json").read_text(encoding="utf-8"))
+        return f"http://127.0.0.1:{sj['port']}/{sj['token']}/"
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- 产物指纹
 
-_FP_EXCLUDE = ("review/serve.json", "review/draft.json")
+_FP_EXCLUDE = ("review/serve.json", "review/draft.json", "review/.progress-opened")
 _FP_EXCLUDE_PREFIX = ("review/backup/",)
 
 
@@ -497,7 +506,7 @@ def progress_payload(work: Path) -> dict:
         except Exception:
             check = None
 
-    st = _structure_payload(work)
+    st = _structure_payload(work) or {}
     strow = {r["k"]: r.get("v", "") for r in (st.get("rows") or [])}
     docno = strow.get("项目编号") or strow.get("招标编号") or ""
 
@@ -547,7 +556,7 @@ def render_report(payload: dict, workbench: bool = False) -> str:
     """
     tpl = REPORT_TEMPLATE.read_text(encoding="utf-8")
     data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
-    link = (f'进入写作流程后确认动作在 <a href="{WORKBENCH_FILENAME}">标书评审台</a>。'
+    link = (f'进入写作流程后确认动作在 <a href="{WORKBENCH_FILENAME}">评审页面</a>。'
             if workbench else "进入写作流程后确认动作在评审页面。")
     return tpl.replace("__REVIEW_DATA__", data_json).replace("__WORKBENCH_LINK__", link)
 
@@ -559,8 +568,14 @@ def main() -> None:
     ap.add_argument("--out", default="", help="输出路径（默认 <work>/review/评审台.html）")
     ap.add_argument("--pages", choices=["all", "report"], default="all",
                     help="report=只产分析报告（分析阶段 G1/G2）；all=连评审台一起（G3 目录确认起）")
+    ap.add_argument("--open-progress", action="store_true",
+                    help="首开写作进度面板（第五步首节开写前的第一动作）：按 --pages all "
+                         "构建后落首开标记 work/review/.progress-opened 并打印面板链接回显——"
+                         "未首开时 docx_toolkit 与 check_writing --section 会硬拦 body 节写入")
     args = ap.parse_args()
     work = Path(args.work)
+    if args.open_progress:
+        args.pages = "all"
     payload = collect_payload(work)
     report = work / "review" / "招标文件分析报告.html"
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -580,9 +595,28 @@ def main() -> None:
             pp = progress_payload(work)
             prog.write_text(render_progress(pp), encoding="utf-8")
             t = pp["totals"]
-            print(f"[写作进度已生成] {prog}（写作阶段监视面——第五步首节开写前打开；"
-                  f"已写 {t['written']}/{t['total']} 节 · 批注 {t['comments']} 条 · "
-                  f"待拍板 {t['pending_promises']} 项；服务模式 /progress.html 自动刷新（数据变化才重载））")
+            print(f"[写作进度已生成] {prog}（写作阶段监视面——第五步首节开写前须首开，"
+                  f"未首开写节被硬拦；已写 {t['written']}/{t['total']} 节 · "
+                  f"批注 {t['comments']} 条 · 待拍板 {t['pending_promises']} 项；"
+                  f"服务模式 /progress.html 自动刷新（数据变化才重载））")
+            if args.open_progress:
+                marker = work / "review" / ".progress-opened"
+                marker.write_text(json.dumps({"at": _now()}), encoding="utf-8")
+                print(f"[进度面板已首开] 标记已落盘 {marker}——写节首开闸解除"
+                      "（docx_toolkit / check_writing --section 放行）。")
+                base = _serve_base(work)
+                fp8 = fingerprint(work)[:8]
+                link = f"{base}progress.html?v={fp8}" if base else str(prog)
+                print(f"★ 把写作进度面板以 Markdown 链接发给用户再写第一节"
+                      f"{'（链接带版本参数，宿主对相同 URL 不重载，带参点击即强制刷新）' if base else '（静态模式发文件路径）'}："
+                      f"[打开写作进度面板]({link})。链接后带一句预期管理："
+                      "「正文开始连续生成，进度随时在这个面板看；写完或遇到要你定的事我再停」。")
+    base = _serve_base(work)
+    if base:
+        print(f"[交付链接] {base}?v={fingerprint(work)[:8]}"
+              "（带版本参数——宿主预览面板对相同 URL 不重新加载，带参链接点击即强制重载出最新数据；"
+              "按门追加锚点 #tab=tree / #tab=guide / #tab=promise / #tab=overview；"
+              "每道门重跑本命令后复制新的回显链接，勿复用旧链接）")
     print("[停轮提醒] 以 Markdown 链接或文件指引让用户打开页面，本轮停轮等答复（指针带「需要你补充」表格；固定告知：不补充也可以继续——缺失部分以 Word 批注标注）"
           "（用户已明确授权连续模式除外）。"
           "用户回「继续/先这样」只越过本门等待、推进到下一门产物落盘为止，"

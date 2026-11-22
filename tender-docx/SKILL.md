@@ -1,9 +1,9 @@
 ---
 name: tender-docx
-display_name: 灵燕标书·合册交付
+display_name: 灵燕标书·整本交付
 display_name_en: Bid Assembly & Delivery
-description: "标书合册交付：把节 docx 自动编号合成整本 Word，实测目录页码，处理格式件前置分页与导出检查，输出收尾汇报。适用于：合册、合成整本、生成最终 Word、编章节页码、目录页码、导出 PDF、交付前检查。"
-description_zh: "标书交付环节：编号与目录页由合册机械生成，待办批注原样迁移，导出「标题→页码」映射供回填；整本是派生产物，改内容回节文件层改再合册。收尾逐条点名待办批注、素材异议与导出提醒。"
+description: "标书整本交付：把节 docx 自动编号合成整本 Word，实测目录页码，处理格式件前置分页与导出检查，输出收尾汇报。适用于：合册、合成整本、生成最终 Word、编章节页码、目录页码、导出 PDF、交付前检查。"
+description_zh: "标书交付环节：把逐节写成的正文合成整本 Word——编号与目录页由整本生成机械完成，待办批注原样迁移，导出「标题→页码」映射供回填；整本是派生产物，改内容回节文件层改再生成。收尾逐条点名待办批注、素材异议与导出提醒，交付物口径=整本 Word 文档（「合册」是内部动作，不进对话）。"
 description_en: "Bid assembly stage: assemble section docx files into the final numbered volume with measured TOC page numbers, migrate pending comments, export a heading-to-page map, and deliver the closing report."
 examples_zh:
   - "把各节合成整本并生成目录页码"
@@ -13,7 +13,7 @@ examples_en:
   - "Assemble all sections into the final volume with TOC page numbers"
   - "Export a PDF preview after assembly"
   - "Check pending comments before delivery"
-version: 2.0.2
+version: 2.1.2
 author: 灵燕智能
 ---
 
@@ -56,7 +56,8 @@ Heading 1-3，缺则回落内置样式并点名）。需重建模板时跑
 
 ## 收尾汇报
 
-- 各节完成情况、未写节及原因、每册整本路径；
+- 各节完成情况、未写节及原因、整本 Word 文档路径（响应文件构成有几册就几个
+  文件）——**对话口径=整本 Word 文档，不说「合册」**（reply-style 硬规则 9）；
 - **待办批注逐条点名**（缺什么/要用户定什么）；素材异议点名（节名 + 不符点 +
   建议）；图示计划 vs 实际产出对账；
 - **沉淀建议**（口径见 @tender-writing-suite/references/reply-style.md，只列

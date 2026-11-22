@@ -311,6 +311,10 @@ def main() -> None:
     dest = build(work, args.sections, out_dir)
     size = dest.stat().st_size
     print(f"[批次已生成] {dest}（{size / 1024:.0f} KB）")
+    if not (work / "review" / ".progress-opened").is_file():
+        print("⚠️ 写作进度面板未首开（work/review/.progress-opened 不存在）——派发前先跑 "
+              "build_review.py 加 --open-progress 首开面板并把链接发给用户，"
+              "否则子任务首次建节即被 docx_toolkit 硬拦。")
     print("派发提示词模板：把该文件路径交给子任务——「读取并严格按 <批次文件> 执行，"
           "文件自包含（纪律/输出路径/素材名片/承诺值都在里面），完成后逐节回传自查结果」。")
 

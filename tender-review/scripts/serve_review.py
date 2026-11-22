@@ -331,11 +331,17 @@ def main() -> None:
     print(f"[评审台服务{'已启动' if fresh else '复用中'}] {url}", flush=True)
     print(f"工作目录：{work.resolve()}", flush=True)
     print("空闲超时自动退出（--idle-timeout 0 关闭）；收尾时用 --stop 停止。", flush=True)
+    print("重复交付同一页面时，链接须带版本参数 ?v=<产物指纹前8位>（宿主预览面板对相同"
+          "URL 不重新加载，带参才强制刷新）——每道门重跑 build_review 后复制其回显的"
+          "[交付链接]，不要复用起台时的裸 URL。", flush=True)
+    print(f"写作进度面板：{url}progress.html（第五步监视面）——第五步首节开写前的第一动作是"
+          "跑 build_review.py 加 --open-progress 首开面板并把链接发给用户，"
+          "未首开写节会被 docx_toolkit / check_writing --section 硬拦。", flush=True)
     print("[停轮提醒] 起台≠门已过：把上面的 URL 以 Markdown 链接（[打开评审页面](URL)）"
           "发给用户并停轮等答复——链接之后本轮不得再发起推进动作"
           "（用户已明确授权连续模式除外）。"
           "用户回「继续/先这样」只越过本门等待、按默认方案推进到下一门产物落盘为止，"
-          "下一门交付后照常停轮——门不得同轮连过；G5 承诺拍板卡未呈现前，"
+          "下一门交付后照常停轮——门不得同轮连过；承诺卡未呈现（G4/G5 合并门）前，"
           "任何节不得落承诺数字（全部待补 + 批注）。门指针里带上「需要你补充」表格"
           "（| 需补充 | 影响 | 不补充的处理 |），并固定告知：不补充也可以继续往下——"
           "缺失部分会以 Word 批注标在正文对应位置。", flush=True)

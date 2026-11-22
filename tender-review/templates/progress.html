@@ -77,7 +77,7 @@ h1{margin:0;font-family:var(--serif);font-size:30px;line-height:1.35;font-weight
 .stat.warn .n{color:var(--warn)}
 .stat.danger .n{color:var(--danger)}
 .stat.ok .n{color:var(--ok)}
-/* 分册进度条 */
+/* 各部分进度条 */
 .volbar{margin-top:14px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface)}
 .volrow{display:flex;align-items:baseline;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border);font-size:13px}
 .volrow:last-child{border-bottom:none}
@@ -130,61 +130,61 @@ table.t.fx{table-layout:fixed;min-width:640px}
 
 <main class="wrap">
   <div class="titleblock">
-    <p class="kicker">写作进度面板 · 监视面</p>
+    <p class="kicker">写作进度面板 · 自动刷新</p>
     <h1 id="doc-title">—</h1>
-    <p class="sub" id="doc-sub"><span id="genat">—</span><span id="livenote" hidden><span class="sep">·</span><span class="live-dot">自动刷新 · 数据有变化才重载</span></span><span class="sep">·</span>确认动作在标书评审台——本页只看不动</p>
+    <p class="sub" id="doc-sub"><span id="genat">—</span><span id="livenote" hidden><span class="sep">·</span><span class="live-dot">自动刷新 · 数据有变化才重载</span></span><span class="sep">·</span>确认动作在评审页面——本页只看不动</p>
   </div>
 
   <nav class="nav" id="nav">
     <a href="#sec1"><span class="n">一</span>进度总览</a>
-    <a href="#sec2"><span class="n">二</span>批注台账</a>
+    <a href="#sec2"><span class="n">二</span>批注清单</a>
     <a href="#sec3"><span class="n">三</span>未写章节</a>
-    <a href="#sec4"><span class="n">四</span>待拍板承诺</a>
+    <a href="#sec4"><span class="n">四</span>待你确认的承诺</a>
     <a href="#sec5"><span class="n">五</span>校验结果</a>
   </nav>
   <div class="rail" id="rail">
     <a class="rl" href="#sec1"><span class="n">一</span>进度总览</a>
-    <a class="rl" href="#sec2"><span class="n">二</span>批注台账</a>
+    <a class="rl" href="#sec2"><span class="n">二</span>批注清单</a>
     <a class="rl" href="#sec3"><span class="n">三</span>未写章节</a>
-    <a class="rl" href="#sec4"><span class="n">四</span>待拍板承诺</a>
+    <a class="rl" href="#sec4"><span class="n">四</span>待你确认的承诺</a>
     <a class="rl" href="#sec5"><span class="n">五</span>校验结果</a>
   </div>
 
   <section class="sec" id="sec1">
     <div class="sec-head"><h2>一、进度总览</h2><span class="count" id="c1"></span></div>
-    <p class="sec-note">「已写」＝工作目录里已有该节的 Word 文件；批注＝各节正文里的待办批注（全量台账在下一节）。不补充也可以继续往下——缺失部分已以 Word 批注标在正文对应位置，随时可补。</p>
+    <p class="sec-note">「已写」＝工作目录里已有该节的 Word 文件；批注＝各节正文里的待办批注（全量清单在下一节）。不补充也可以继续往下——缺失部分已以 Word 批注标在正文对应位置，随时可补。</p>
     <div class="statgrid" id="stats"></div>
     <div class="volbar" id="volbars"></div>
   </section>
 
   <section class="sec" id="sec2">
-    <div class="sec-head"><h2>二、批注台账</h2><span class="count" id="c2"></span></div>
-    <p class="sec-note">散落在各节 Word 里的批注全量列出——递交前逐项销号：能补的补、要拍板的找用户、确认不了的原样保留并在收尾汇报点名。批注文本以正文原样为准。</p>
+    <div class="sec-head"><h2>二、批注清单</h2><span class="count" id="c2"></span></div>
+    <p class="sec-note">散落在各节 Word 里的批注全量列出——递交前逐项销号：能补的补、要用户给值的找用户、确认不了的原样保留并在收尾汇报点名。批注文本以正文原样为准。</p>
     <div class="tablewrap"><table class="t fx" id="cmt-tbl"></table></div>
   </section>
 
   <section class="sec" id="sec3">
     <div class="sec-head"><h2>三、未写章节</h2><span class="count" id="c3"></span></div>
-    <p class="sec-note">目录已定、正文尚未开写的章节（含封面/目录机械生成项的排除说明：封面与目录由合册自动生成，不计入）。</p>
+    <p class="sec-note">目录已定、正文尚未开写的章节（封面与目录由整本生成时自动产出，不计入）。</p>
     <ul class="pendlist" id="pend"></ul>
   </section>
 
   <section class="sec" id="sec4">
-    <div class="sec-head"><h2>四、待拍板承诺</h2><span class="count" id="c4"></span></div>
-    <p class="sec-note">承诺清单里值还是「待补」的事项——这些数字只出自你的拍板，助手不代填；拍板在评审页面或直接在对话里给值。</p>
+    <div class="sec-head"><h2>四、待你确认的承诺</h2><span class="count" id="c4"></span></div>
+    <p class="sec-note">承诺清单里值还是「待补」的事项——这些数字只出自你的确认，助手不代填；在评审页面或直接在对话里给值都可以。</p>
     <div class="itemlist" id="proms"></div>
   </section>
 
   <section class="sec" id="sec5">
     <div class="sec-head"><h2>五、校验结果</h2><span class="count" id="c5"></span></div>
-    <p class="sec-note">全局校验（承诺比对/节间查重/占位与残留扫描）的最近一次结果，跑于收尾合册前。</p>
+    <p class="sec-note">全局校验（承诺比对/节间查重/占位与残留扫描）的最近一次结果，跑于收尾交付前。</p>
     <div id="chk"></div>
   </section>
 
   <div class="endnote">
-    <span id="snapnote">本页为只读监视面，数据取自 <span id="genat2">—</span>。</span>
+    <span id="snapnote">本页只读、自动刷新，数据取自 <span id="genat2">—</span>。</span>
     <span class="spacer"></span>
-    <span>确认与修改在 <a href="评审台.html">标书评审台</a>；看分析在 <a href="招标文件分析报告.html">招标文件分析报告</a>。</span>
+    <span>确认与修改在 <a href="评审台.html">评审页面</a>；看分析在 <a href="招标文件分析报告.html">招标文件分析报告</a>。</span>
   </div>
 </main>
 
@@ -211,8 +211,8 @@ if (DATA.live) document.getElementById("livenote").hidden = false;
   grid.innerHTML =
     card(done ? "ok" : "", t.written ?? 0, t.total, "已写章节（份内合计）") +
     card(t.comments ? "warn" : "", t.comments ?? 0, "", "批注待处理") +
-    card(t.pending_promises ? "warn" : "", t.pending_promises ?? 0, "", "待拍板承诺") +
-    card(t.issues ? "danger" : "ok", t.issues ?? 0, "", "校验 issue（最近一次）");
+    card(t.pending_promises ? "warn" : "", t.pending_promises ?? 0, "", "待确认承诺") +
+    card(t.issues ? "danger" : "ok", t.issues ?? 0, "", "校验问题（最近一次）");
   document.getElementById("c1").textContent = t.total != null ? `${t.written ?? 0}/${t.total}` : "";
   const vb = document.getElementById("volbars");
   vb.innerHTML = "";
@@ -247,15 +247,15 @@ if (DATA.live) document.getElementById("livenote").hidden = false;
     rows.push(`<li><span class="volname">${esc(v.vol)}</span>${v.pending.map(p => esc(p)).join("、")}</li>`);
   }
   document.getElementById("c3").textContent = (DATA.totals && DATA.totals.total != null) ? `${DATA.totals.total - (DATA.totals.written || 0)} 节未写` : "";
-  host.innerHTML = rows.length ? rows.join("") : `<li style="color:var(--ok)">全部章节已开写（封面/目录由合册自动生成）。</li>`;
+  host.innerHTML = rows.length ? rows.join("") : `<li style="color:var(--ok)">全部章节已开写（封面/目录由整本生成自动产出）。</li>`;
 })();
 
-/* 四、待拍板承诺 */
+/* 四、待你确认的承诺 */
 (function () {
   const host = document.getElementById("proms");
   const items = (DATA.promises || []).filter(p => PEND_VALUE_RE.test(p.value || "") || !(p.value || "").trim() || p.value === "—");
   document.getElementById("c4").textContent = items.length ? `${items.length} 项` : "";
-  if (!items.length) { host.innerHTML = `<p class="sec-note" style="margin-top:12px">没有待拍板事项——承诺清单全部已拍板。</p>`; return; }
+  if (!items.length) { host.innerHTML = `<p class="sec-note" style="margin-top:12px">没有待确认事项——承诺清单全部已确认。</p>`; return; }
   host.innerHTML = items.map(p => `<div class="item"><div class="q">${esc(p.item)}</div><div class="meta">当前值：<b>${esc(p.value || "（空）")}</b>${p.note ? ` · 说明：${esc(p.note)}` : ""}</div></div>`).join("");
 })();
 
@@ -263,11 +263,11 @@ if (DATA.live) document.getElementById("livenote").hidden = false;
 (function () {
   const host = document.getElementById("chk");
   const chk = DATA.check;
-  if (!chk) { document.getElementById("c5").textContent = ""; host.innerHTML = `<p class="sec-note" style="margin-top:12px">全局校验尚未运行——进入收尾（合册前校验）后，结果落在本页。</p>`; return; }
-  document.getElementById("c5").textContent = `${(chk.issues || []).length} issue / ${(chk.warnings || []).length} 提示 · ${esc(chk.at || "")}`;
+  if (!chk) { document.getElementById("c5").textContent = ""; host.innerHTML = `<p class="sec-note" style="margin-top:12px">全局校验尚未运行——进入收尾（交付前校验）后，结果落在本页。</p>`; return; }
+  document.getElementById("c5").textContent = `${(chk.issues || []).length} 项问题 / ${(chk.warnings || []).length} 项提示 · ${esc(chk.at || "")}`;
   host.innerHTML = (chk.issues || []).map(i => `<div class="chk-issue">${esc(i)}</div>`).join("") +
     (chk.warnings || []).map(w => `<div class="chk-warn">${esc(w)}</div>`).join("") +
-    (!(chk.issues || []).length && !(chk.warnings || []).length ? `<div class="chk-issue" style="border-left-color:var(--ok);background:var(--accent-soft)">全部通过，无 issue 无提示。</div>` : "");
+    (!(chk.issues || []).length && !(chk.warnings || []).length ? `<div class="chk-issue" style="border-left-color:var(--ok);background:var(--accent-soft)">全部通过，无问题无提示。</div>` : "");
 })();
 
 /* 自刷新（指纹门控，仅服务模式 live=true 开启）：每 30s 探一次产物指纹，

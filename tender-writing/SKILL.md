@@ -13,7 +13,7 @@ examples_en:
   - "The outline is approved — start writing the sections"
   - "Continue with the next technical section"
   - "Run the global validation on commitments and duplication"
-version: 2.0.2
+version: 2.1.2
 author: 灵燕智能
 ---
 
@@ -21,7 +21,8 @@ author: 灵燕智能
 
 开始前先载入入口技能 tender-writing-suite：红线、确认门、工作目录与回复口径
 以它为准；本文件只讲本环节做法。写节前置条件：`work/review/评审台.html` 已存在
-且 G5 拍板卡已呈现过——缺任一即门被跳，回对应门补「建/刷新确认面 → 发指针 →
+且承诺卡已呈现过（G4/G5 合并门已停轮交付）——缺任一即门被跳，回对应门补
+「建/刷新确认面 → 发指针 →
 停轮」再开写（见 @tender-writing-suite/references/stage-gates.md 写节前置自检条）。
 
 ## 上游检查
@@ -30,27 +31,39 @@ author: 灵燕智能
 - `work/body/写作指引.md` 缺失 → 从第四步开始；
 - 指引已存在 → 按指引续写，只补未完成节。
 
-## 第四步：写作准备（先指引、后承诺；每份停轮汇报一次）
+## 第四步：写作准备（指引与承诺一次成形，G4/G5 合并门一次停轮）
 
-1. 生成 `work/body/写作指引.md`（格式契约 @references/guide-format.md）：逐节判
-   写作模式（素材修订/格式跟随/推理撰写），可用素材与公司事实查清填表——检索
-   通道以环境实际的知识库/资料库工具为准，没有则向用户索取（**查到不
-   写进指引=白查**）。跑 `python3 scripts/check_writing.py --guide` 过 G4 门：
-   刷新评审台（`python3 tender-review/scripts/build_review.py --work work`）打开
-   指引 tab；承诺事项一次列全（主体/工期/人员/服务承诺/报价口径；清单已存在
-   则并入，只列缺项），问答阶段已确认的直接沿用，不重复问。
-2. 用户答复后落 `work/body/关键事实与承诺.md`（事项｜值｜说明；值只取用户答复
-   与分析产物里的事实，缺的标待补）。**值列写可独立检索的裸值**（人名/数字/
-   期限，如「12 个月」），解释放说明列——校验按值列做全文子串比对。过 G5 门：
-   刷新评审台打开承诺 tab（逐项拍板卡在页面），对话指针=承诺值一行汇总；未拍板
-   的值落「待补」。
+1. **一次生成两份产物**：`work/body/写作指引.md`（格式契约
+   @references/guide-format.md：逐节判写作模式，可用素材与公司事实查清填表
+   ——检索通道以环境实际的知识库/资料库工具为准，没有则向用户索取，
+   **查到不写进指引=白查**）与 `work/body/关键事实与承诺.md`（事项｜值｜说明，
+   一次列全：主体/工期/人员/服务承诺/报价口径；问答阶段已确认的直接沿用，
+   值只取用户答复与分析产物里的事实，缺的标待补，不重复问）。
+   **值列写可独立检索的裸值**（人名/数字/期限，如「12 个月」），解释放说明列
+   ——说明列写用户能直接回答的问句或填空指引（带选项/示例，如「投标主体
+   是哪种：企业/事业单位/个体工商户/自然人？」），**不写「须用户确认××」
+   「决定××形式」类实现腔**——校验按值列做全文子串比对。
+2. **过 G4/G5 合并门（一次停轮）**：跑 `python3 scripts/check_writing.py --guide`
+   → 刷新评审台（`python3 tender-review/scripts/build_review.py --work work`），
+   指引与承诺两 tab 全量呈现（两 tab 只读，改动与给值走对话）；对话指针=
+   写作构成一行（平实说法）+ 承诺值一行汇总（已知直列、待补点名）+「素材与
+   值直接在对话里给我，或看完页面回『继续』」（规范见
+   @tender-writing-suite/references/stage-gates.md G4/G5 行）。
+3. **答复后直接开写**：用户答复（素材/值/「继续」）→ 更新指引与承诺清单
+   （值落列）→ 首开进度面板，开写消息带「承诺值一行汇总 + 面板链接」与预期
+   管理句 → 进第五步——本门只停这一次轮（未给值照默认：待补+批注）。
 
 ## 第五步：逐节生成（按指引模式路由）
 
-首节开写前**首开写作进度面板**（`work/review/写作进度.html`——监视面：进度/
-批注台账/待拍板承诺；服务模式自刷新，静态模式每节重跑
-`tender-review/scripts/build_review.py`）——**未首开禁写第一节**（与入口红线
-「评审台未首建禁建节」同构）。**进入本步必读
+首节开写前第一动作：`python3 tender-review/scripts/build_review.py --work work
+--open-progress` **首开写作进度面板**（`work/review/写作进度.html`——监视面：
+进度/批注清单/待拍板承诺；服务模式自刷新，静态模式每节重跑 build_review），
+把回显的面板链接以 Markdown 发给用户，并带一句预期管理：**「正文开始连续
+生成，进度随时在这个面板看；写完或遇到要你定的事我再停」**（长静默期的
+预期管理，防「发完链接就消失」感）——**未首开禁写第一节，工具硬拦**
+（docx_toolkit 拒写 body 节、`check_writing --section` 拒查；首开标记
+`work/review/.progress-opened` 落盘后放行，与入口红线「评审台未首建禁建节」
+同构）。**进入本步必读
 @references/section-writing.md**：三模式细则、工具链速查（docx_toolkit 在
 `tender-docx/scripts/`）、素材三级落地、语言纪律都在其中。核心路由：素材修订 =
 copy-from 注入素材授权区间（保真）→ revise 适配；格式跟随 = copy-from 拷格式件
@@ -65,7 +78,8 @@ table 块，不流水句铺）。每节写完跑 `check_writing.py --section "<�
 结果全量在进度面板——对话只给结论级汇报），**校验跑完直接进第七步合册**——
 合册代价小（秒级重跑）、用户调整都在整本层做，**禁止问「现在合册还是先补齐」
 类岔口**；补齐清单进进度页与收尾汇报，由用户拿到整本后处理（issue 未清零也
-合册，收尾逐条点名）：
+合册，收尾逐条点名）。**收尾对话口径：交付物=整本 Word 文档——「合册」是
+内部动作，不进对话、不作提问**（reply-style 硬规则 9）：
 
 ```bash
 python3 scripts/check_writing.py            # 承诺比对 + 节间查重 + 残留扫描
@@ -78,4 +92,7 @@ python3 scripts/check_writing.py --json work/review/check-result.json   # 落盘
 
 ## 链尾 HARD-GATE
 
-G6 交付并停轮收指针后，进入第七步合册：只载入 tender-docx 一个环节技能。
+第六步校验通过后**同轮**进入第七步合册：只载入 tender-docx 一个环节技能。
+G6 的停轮交付（校验结论 + 整本 Word 文档路径 + 收尾汇报）由第七步收尾时
+**一并完成，一次停轮收口**——校验后不单独停轮、不问岔口（与第六步「直接
+合册」及 stage-gates G6 行同义，勿按「先停轮后合册」读）。

@@ -54,6 +54,9 @@ MATERIAL_TOKEN = re.compile(r"^(.+\.docx)\s+L(\d+)(?:-L?(\d+))?$")
 # 指引缺口/备注列的待办标记——列里声明了缺口或批注待办，节 docx 就必须带
 # Word 批注（散文参数化回避不替代批注：待拍板事项要以批注台账为载体点给用户）
 GAP_MARK = re.compile(r"【缺|批注")
+# 承诺说明列实现腔（warning 级）：说明列会原样展示给用户，「须用户确认××」
+# 「决定/影响××」开头的是判定逻辑不是问句——用户不知道该怎么答
+PROMISE_NOTE_IMPL = re.compile(r"须用户(确认|核实|提供)|^(决定|影响)")
 # 小标题自带编号形态（一、/（一）/1. 式）——合册按树深度接续节号，会双重编号
 HEADING_NUMBERING = re.compile(r"^[一二三四五六七八九十]+、|^[（(][一二三四五六七八九十]+[)）]|^\d+[.、]")
 LEGAL_MODES = {"素材修订", "格式跟随", "推理撰写", "—"}
@@ -788,6 +791,10 @@ def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]
         for r in rows:
             r = (r + [""] * 3)[:3]
             item, value = r[0], r[1]
+            if PROMISE_NOTE_IMPL.search(r[2]):
+                warnings.append(f"承诺说明列是实现腔：{item}——写成用户能直接回答的问句"
+                                f"（含选项/示例），如「投标主体是哪种：企业/事业单位/"
+                                f"个体工商户/自然人？」")
             if not value or value in ("—", "值") or re.search(r"待补|待确认|待定", value):
                 continue
             v = norm(value)
@@ -862,6 +869,29 @@ def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]
     return issues, warnings
 
 
+_G6_DIRECTIVE = ("[G6 指令] 校验跑完直接进第七步合册（载入 tender-docx，秒级重跑），"
+                 "不向用户问「合册还是先补齐」类岔口；补齐项以 Word 批注承载，"
+                 "收尾汇报逐条点名并带写作进度面板 Markdown 链接。对话口径：交付物="
+                 "整本 Word 文档——「合册」是内部动作，不进对话、不作提问。")
+
+
+def _stage_gate(work: Path) -> None:
+    """--section 前置硬闸（与 docx_toolkit 写节闸同源，兜住绕开工具闸的写法）：
+    评审台未首建、或写作进度面板未首开（work/review/.progress-opened 标记缺失，
+    build_review.py --open-progress 写入）即拒查——监视面倒置为事后交付物是
+    真机事故，单节自查是每节必经点，闸挂在这里。"""
+    review = work / "review"
+    if not (review / "评审台.html").is_file():
+        die("评审台未首建禁写节（入口红线）——回入口技能补 G3：目录确认 → "
+            "首建评审台 → 发链接 → 停轮，再进第五步。", 2)
+    if not (review / ".progress-opened").is_file():
+        die(f"写作进度面板未首开——监视面必须先给到用户，开写第一动作：\n"
+            f"  python3 {_sibling_scripts('tender-review') / 'build_review.py'} "
+            f"--work {work} --open-progress\n"
+            f"把回显的面板链接以 Markdown 发给用户，再写节（标记 "
+            f"{review / '.progress-opened'} 落盘后放行，只拦首节前）。", 2)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="正文机器校验")
     ap.add_argument("--work", default="work")
@@ -883,6 +913,7 @@ def main() -> None:
         sec = Path(args.section)
         if not sec.is_file():
             die(f"节文件不存在：{sec}")
+        _stage_gate(work)
         issues, warnings = check_section(work, sec)
     elif args.analysis:
         issues, warnings = check_analysis(work)
@@ -908,14 +939,19 @@ def main() -> None:
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[结果已落盘] {out}")
 
+    is_global = not (args.guide or args.section or args.analysis or args.outline)
     for w in warnings:
         print(f"⚠️ {w}")
     if not issues:
         print("[校验通过] 全部合规")
+        if is_global:
+            print(_G6_DIRECTIVE)
         sys.exit(0)
     print(f"[校验未通过] 共 {len(issues)} 处问题：")
     for i in issues:
         print(f"- {i}")
+    if is_global:
+        print(_G6_DIRECTIVE)
     sys.exit(1)
 
 

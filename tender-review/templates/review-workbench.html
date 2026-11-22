@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>标书评审台</title>
+<title>标书评审页面</title>
 <style>
 /* ===== 基底（自包含，无外部依赖；视觉对照桌面版 token：brand 青/danger 红/info 蓝/warning 琥珀） ===== */
 :root{
@@ -239,11 +239,11 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
 <body>
 
 <header class="topbar">
-  <h1><span class="mark" aria-hidden="true"><svg viewBox="0 0 600 600" focusable="false"><path fill="currentColor" fill-rule="evenodd" d="M48.2 561.3C60.5 555.9 76.9 546 104 527.8C141.1 502.8 160 492.1 185.5 481.5C215.1 469.2 250 461.1 289.5 457.5C324.8 454.3 347.7 450.3 368 443.8C416.9 428.3 455.4 400.9 490.5 356.5C512 329.4 522.4 319 539.5 307.5C548.1 301.8 566.1 293 575.5 290C586.3 286.5 588.6 283.2 583.4 279.1C580.3 276.7 566.1 272 554.3 269.5L546 267.7L542.1 259.6C531.8 238.5 510.5 222 485.5 215.8C474.7 213.2 452.1 212.7 440.1 214.9C427.1 217.2 405.9 224.3 384.6 233.5C365.6 241.6 371.8 236.8 395 225.3C401.3 222.2 406.7 219.5 406.9 219.4C409.5 217.3 381.4 194 357.8 178.7C294.7 137.7 203 100.5 127 84.9C111 81.7 91.4 79 83.3 79C76.8 79 74.4 81.6 75.3 88C77.6 105.5 113.9 152.5 150.1 185L158.6 192.7L167.6 193.4C180 194.4 216 199.6 231 202.6C279.1 212.2 319.4 227.7 350.5 248.4C362.2 256.2 378.6 270.9 376.4 271.7C375.8 271.9 370.2 269.1 363.9 265.4C302 229.4 239.4 212 139 202.8C117.3 200.8 108.4 200.5 60.8 200.5C7.9 200.5 7.1 200.5 4.3 202.6C-2.6 207.7 1.3 215.3 21 235.1C63.2 277.6 128.1 316.3 191.2 336.6C201.2 339.8 201.3 339.9 197.4 348.6C174.2 401.7 131.1 443.6 67 475.6C52.5 482.8 29.4 493 14.7 498.5C12.1 499.5 9.4 501.2 8.9 502.2C6.4 506.9 11.2 512 18 512C32.8 512 95.6 490.1 113.9 478.6C116.3 477.1 118.4 476 118.6 476.3C119.7 477.3 73.3 520.4 42.2 547.3C30.8 557.1 29.2 560.1 33.1 563.3C36 565.6 39.6 565.2 48.2 561.3Z M145.5 465.7C160 452.8 182.4 429.7 191.8 418.2C208.5 397.6 225.7 369.3 232.5 350.8L234.2 346.1L248.4 346.7C272.1 347.7 290.8 343.7 305.7 334.4C313.1 329.8 319.4 323.6 318.7 321.7C318.2 320.2 312.9 320.3 297.2 322C282.9 323.6 262.6 322.4 242.5 319C187.8 309.5 118.6 278.4 74 243.2C63.7 235 47.8 220.1 48.4 219.1C49.2 217.9 110.8 221 138 223.6C240.1 233.3 314.5 256.4 363.9 293.7C369.6 298 374.9 301.9 375.6 302.5C376.4 303.1 382.2 301.7 393.2 298.2C429.9 286.6 458.3 283.1 490.5 286C507.1 287.5 511.6 288.1 522.8 289.9L533.2 291.5L524.8 295.8C507 305 491.3 317.7 463 346C433.9 375.1 416.7 388.4 391 401.8C359.1 418.5 329.7 426 271 432.5C224.3 437.8 194.9 446.3 153.5 466.6C146.3 470.1 139.8 473 139 472.9C138.2 472.9 141.1 469.7 145.5 465.7Z M488.7 277C480.9 270.9 486.2 257 496.3 257C507.1 257 512.4 269.8 504.5 276.8C501 279.8 492.4 279.9 488.7 277Z"/></svg></span>标书评审台</h1>
+  <h1><span class="mark" aria-hidden="true"><svg viewBox="0 0 600 600" focusable="false"><path fill="currentColor" fill-rule="evenodd" d="M48.2 561.3C60.5 555.9 76.9 546 104 527.8C141.1 502.8 160 492.1 185.5 481.5C215.1 469.2 250 461.1 289.5 457.5C324.8 454.3 347.7 450.3 368 443.8C416.9 428.3 455.4 400.9 490.5 356.5C512 329.4 522.4 319 539.5 307.5C548.1 301.8 566.1 293 575.5 290C586.3 286.5 588.6 283.2 583.4 279.1C580.3 276.7 566.1 272 554.3 269.5L546 267.7L542.1 259.6C531.8 238.5 510.5 222 485.5 215.8C474.7 213.2 452.1 212.7 440.1 214.9C427.1 217.2 405.9 224.3 384.6 233.5C365.6 241.6 371.8 236.8 395 225.3C401.3 222.2 406.7 219.5 406.9 219.4C409.5 217.3 381.4 194 357.8 178.7C294.7 137.7 203 100.5 127 84.9C111 81.7 91.4 79 83.3 79C76.8 79 74.4 81.6 75.3 88C77.6 105.5 113.9 152.5 150.1 185L158.6 192.7L167.6 193.4C180 194.4 216 199.6 231 202.6C279.1 212.2 319.4 227.7 350.5 248.4C362.2 256.2 378.6 270.9 376.4 271.7C375.8 271.9 370.2 269.1 363.9 265.4C302 229.4 239.4 212 139 202.8C117.3 200.8 108.4 200.5 60.8 200.5C7.9 200.5 7.1 200.5 4.3 202.6C-2.6 207.7 1.3 215.3 21 235.1C63.2 277.6 128.1 316.3 191.2 336.6C201.2 339.8 201.3 339.9 197.4 348.6C174.2 401.7 131.1 443.6 67 475.6C52.5 482.8 29.4 493 14.7 498.5C12.1 499.5 9.4 501.2 8.9 502.2C6.4 506.9 11.2 512 18 512C32.8 512 95.6 490.1 113.9 478.6C116.3 477.1 118.4 476 118.6 476.3C119.7 477.3 73.3 520.4 42.2 547.3C30.8 557.1 29.2 560.1 33.1 563.3C36 565.6 39.6 565.2 48.2 561.3Z M145.5 465.7C160 452.8 182.4 429.7 191.8 418.2C208.5 397.6 225.7 369.3 232.5 350.8L234.2 346.1L248.4 346.7C272.1 347.7 290.8 343.7 305.7 334.4C313.1 329.8 319.4 323.6 318.7 321.7C318.2 320.2 312.9 320.3 297.2 322C282.9 323.6 262.6 322.4 242.5 319C187.8 309.5 118.6 278.4 74 243.2C63.7 235 47.8 220.1 48.4 219.1C49.2 217.9 110.8 221 138 223.6C240.1 233.3 314.5 256.4 363.9 293.7C369.6 298 374.9 301.9 375.6 302.5C376.4 303.1 382.2 301.7 393.2 298.2C429.9 286.6 458.3 283.1 490.5 286C507.1 287.5 511.6 288.1 522.8 289.9L533.2 291.5L524.8 295.8C507 305 491.3 317.7 463 346C433.9 375.1 416.7 388.4 391 401.8C359.1 418.5 329.7 426 271 432.5C224.3 437.8 194.9 446.3 153.5 466.6C146.3 470.1 139.8 473 139 472.9C138.2 472.9 141.1 469.7 145.5 465.7Z M488.7 277C480.9 270.9 486.2 257 496.3 257C507.1 257 512.4 269.8 504.5 276.8C501 279.8 492.4 279.9 488.7 277Z"/></svg></span>标书评审页面</h1>
   <span class="proj" id="proj"></span>
   <span class="spacer"></span>
   <span class="savestate" id="savestate" hidden><span class="dot"></span><span id="savesxt"></span></span>
-  <span class="conn" id="datats" hidden title="页面打开时实时读取工作目录最新数据；评审台保存落盘后，重新打开或刷新页面即最新"></span>
+  <span class="conn" id="datats" hidden title="页面打开时实时读取工作目录最新数据；页面保存落盘后，重新打开或刷新页面即最新"></span>
   <span class="conn" id="conn">检测连接…</span>
 </header>
 
@@ -263,7 +263,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
     <p class="small muted" id="report-stats" style="margin:0 0 10px">—</p>
     <a class="btn primary" id="report-link" href="招标文件分析报告.html">打开报告页面 →</a>
   </div>
-  <div class="card"><h3>写作进度 <span class="sub">监视面——服务模式每 30 秒自动刷新；确认动作都在本台</span></h3>
+  <div class="card"><h3>写作进度 <span class="sub">打开期间自动刷新（数据变化才重载）；确认动作都在评审页面做</span></h3>
     <p class="small muted" id="progress-stats" style="margin:0 0 10px">—</p>
     <a class="btn" id="progress-link" href="写作进度.html">打开进度面板 →</a>
   </div>
@@ -295,11 +295,9 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
 <section class="panel" id="panel-guide">
   <div id="guide-banner"></div>
   <div class="tree-tools">
-    <button class="btn primary" id="guide-edit-btn">编辑指引</button>
-    <button class="btn primary" id="guide-done-btn" hidden>完成编辑</button>
+    <span class="small muted" style="align-self:center">指引只读——要调整某节写法（复用素材 / 按招标格式填 / 新写），直接在对话里说。</span>
     <span class="savestate" id="guide-savestate" hidden><span class="dot"></span><span></span></span>
     <span class="spacer" style="flex:1"></span>
-    <button class="btn" id="guide-export-btn" hidden>导出改动文件</button>
   </div>
   <div class="gwrap">
     <div class="gtree">
@@ -315,11 +313,9 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
 <!-- 承诺清单 -->
 <section class="panel" id="panel-promise">
   <div class="tree-tools">
-    <button class="btn primary" id="promise-edit-btn">填写 / 调整</button>
-    <button class="btn primary" id="promise-done-btn" hidden>完成</button>
+    <span class="small muted" style="align-self:center">清单只读——要给值或改值直接在对话里说（如：工期 12 个月）；助手填入后本页刷新可见。</span>
     <span class="savestate" id="promise-savestate" hidden><span class="dot"></span><span></span></span>
     <span class="spacer" style="flex:1"></span>
-    <button class="btn" id="promise-export-btn" hidden>导出改动文件</button>
   </div>
   <div id="promises"></div>
 </section>
@@ -344,9 +340,9 @@ const S = {
   tab: "overview", vol: {}, expanded: new Set(), undo: [], redo: [],
   log: {},                                     // vol -> [ops]
   treeEdit: false, numScheme: "chapter", treeSearch: "", structConfirmed: false,
-  savedLogLen: {}, guideSel: null, guideEdit: false, guideFilter: "all", guideSearch: "",
+  savedLogLen: {}, guideSel: null, guideFilter: "all", guideSearch: "",
   guideDirty: {}, guideRemoved: {},            // key -> {field:val} / key -> true
-  promiseEdit: false, promiseDirty: {},
+  promiseDirty: {},
   savedGuide: false, savedPromise: false,
   online: ONLINE, failCount: 0,
   fp: DATA.fp || null, stale: false, justSaved: false,   // 产物指纹基线 / 外部更新提示 / 自存宽限
@@ -700,7 +696,7 @@ function renderRow(n, volName, numMap, depth, idx, parentUid) {
     });
     del.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.5 4.2h11" stroke-linecap="round"/><path d="M5.8 4.2V3c0-.4.3-.8.8-.8h2.8c.5 0 .8.4.8.8v1.2"/><path d="M4.2 4.2l.6 8.9c0 .5.4.9.9.9h4.6c.5 0 .9-.4.9-.9l.6-8.9" stroke-linejoin="round"/><path d="M6.6 6.6v4.2M9.4 6.6v4.2" stroke-linecap="round"/></svg>';
     btns.appendChild(del);
-    ["封面", "目录"].includes(n.text) && (del.title = "删除（含子节点）——合册按名识别「" + n.text + "」", btns.title = "「封面」「目录」由合册按名识别，改名/删除会影响封面页与目录页生成");
+    ["封面", "目录"].includes(n.text) && (del.title = "删除（含子节点）——整本生成按名识别「" + n.text + "」", btns.title = "「封面」「目录」由整本生成按名识别，改名/删除会影响封面页与目录页生成");
     line.appendChild(btns);
   }
   row.appendChild(line);
@@ -805,7 +801,7 @@ function openTrace(id) {
         }).catch(() => ctxHost.textContent = "原文上下文加载失败（服务断开）。");
     } else if (r.file && r.line) {
       const p = document.createElement("p"); p.className = "muted small"; p.style.marginTop = "8px";
-      p.textContent = `出处 ${r.file} L${r.line}——连接评审台服务后可看原文上下文切片。`;
+      p.textContent = `出处 ${r.file} L${r.line}——连上评审页面的本地服务后可看原文上下文切片。`;
       m.appendChild(p);
     }
   }
@@ -817,6 +813,9 @@ function openTrace(id) {
 
 /* ================= 写作指引 ================= */
 const MODES = ["素材修订", "格式跟随", "推理撰写"];
+const MODE_TIP = { "素材修订": "从历史标书/素材拷贝原文，按本项目改写",
+                   "格式跟随": "按招标方给定格式原件填空适配",
+                   "推理撰写": "按招标要求针对本项目新写" };
 function rowByKey(key) { return DATA.guide.rows.find(r => r.key === key) || null; }
 function guideFlags(key) {
   const row = rowByKey(key); const out = [];
@@ -930,7 +929,7 @@ function renderGuideBanner() {
 function renderGuideDetail() {
   const host = $("#guide-detail"); host.innerHTML = "";
   const key = S.guideSel;
-  if (!key) { host.innerHTML = `<p class="muted small" style="margin-top:20px">从左侧选一个章节查看与编辑写作指引。</p>`; return; }
+  if (!key) { host.innerHTML = `<p class="muted small" style="margin-top:20px">从左侧选一个章节查看写作指引。</p>`; return; }
   const row = rowByKey(key);
   const flags = guideFlags(key);
   const nodeInfo = guideNodeInfo(key);
@@ -943,8 +942,7 @@ function renderGuideDetail() {
   if (flags.includes("unassigned")) {
     const em = document.createElement("div");
     em.style.cssText = "border:1.5px dashed var(--line);border-radius:var(--r-md);padding:16px;color:var(--ink-2);font-size:13px";
-    em.innerHTML = `本节还没有指引行——目录里有这个章节，但写作指引没有给它分配行，AI 不会写它。${S.guideEdit ? "" : "点左上角『编辑指引』后可补行。"}<br><br>`;
-    if (S.guideEdit) { const b = document.createElement("button"); b.className = "btn primary sm"; b.textContent = `+ 为『${key}』添加指引行`; b.onclick = () => { S.guideDirty[key] = S.guideDirty[key] || {}; setGuideField(key, "mode", "推理撰写"); renderGuideDetail(); renderGuidePills(); }; em.appendChild(b); }
+    em.innerHTML = `本节还没有指引行——目录里有这个章节，但写作指引没有给它分配行，AI 不会写它。要补行，直接在对话里说。<br><br>`;
     host.appendChild(em); return;
   }
   const B = (title) => { const d = document.createElement("div"); d.className = "block"; d.innerHTML = `<div class="bt">${title}</div>`; host.appendChild(d); return d; };
@@ -957,31 +955,12 @@ function renderGuideDetail() {
   }
   /* 怎么写 */
   const how = B("怎么写");
-  if (S.guideEdit) {
-    const chips = document.createElement("div"); chips.className = "modechips";
-    const cur = getGuideField(key, "mode") ?? (row && row.mode) ?? "推理撰写";
-    for (const m of MODES) {
-      const b = document.createElement("button"); const parts = cur.split("+").filter(Boolean);
-      b.textContent = m; b.classList.toggle("on", parts.includes(m));
-      b.onclick = () => {
-        let parts2 = getGuideField(key, "mode") ?? (row && row.mode) ?? "推理撰写";
-        let arr = parts2.split("+").filter(p => MODES.includes(p));
-        arr.includes(m) ? arr = arr.filter(x => x !== m) : arr.push(m);
-        setGuideField(key, "mode", MODES.filter(x => arr.includes(x)).join("+") || "—");
-        renderGuideDetail();
-      };
-      chips.appendChild(b);
-    }
-    const ex = document.createElement("button"); ex.className = "excl"; ex.title = "这一节不写正文：按招标原件填空或贴附件（投标函、授权书、身份证复印件这类），不走 AI 撰写";
-    ex.textContent = "不写正文"; ex.classList.toggle("on", (getGuideField(key, "mode") ?? (row && row.mode)) === "—");
-    ex.onclick = () => { setGuideField(key, "mode", (getGuideField(key, "mode") ?? (row && row.mode)) === "—" ? "推理撰写" : "—"); renderGuideDetail(); };
-    chips.appendChild(ex); how.appendChild(chips);
-  } else {
-    /* "—" 是「非正文节点」的机器标记，不能把横杠直接甩给用户 */
+  /* "—" 是「非正文节点」的机器标记，不能把横杠直接甩给用户 */
+  {
     const parts = ((row && row.mode) || "").split("+").filter(x => x && x !== "—");
     const d = document.createElement("div"); d.className = "kvrow";
     d.innerHTML = parts.length
-      ? parts.map(x => `<span class="chip brand">${esc(x)}</span>`).join(" ")
+      ? parts.map(x => `<span class="chip brand" title="${esc(MODE_TIP[x] || "")}">${esc(x)}</span>`).join(" ")
       : `<span class="chip">不写正文</span><span class="small muted" style="margin-left:8px">按招标原件填空或贴附件，不走 AI 撰写</span>`;
     how.appendChild(d);
   }
@@ -989,16 +968,7 @@ function renderGuideDetail() {
   const basis = B("依据");
   const curBasis = getGuideField(key, "basis") ?? (row && row.basis) ?? "";
   const ids = curBasis.split(/[,，、\s]+/).filter(x => /^(MAND|TPL|REQ|SCORE)-\d+$/i.test(x));
-  if (S.guideEdit) {
-    const inp = document.createElement("input"); inp.type = "text"; inp.value = curBasis;
-    inp.placeholder = "未指定依据——可从下拉选择（对应招标要求/评分项原文）";
-    inp.setAttribute("list", "registry-list");
-    inp.oninput = () => setGuideField(key, "basis", inp.value);
-    basis.appendChild(inp);
-    const dl = document.createElement("datalist"); dl.id = "registry-list";
-    for (const [id, r] of Object.entries(DATA.registry || {})) { const o = document.createElement("option"); o.value = id; o.label = (r.text || "").slice(0, 40); dl.appendChild(o); }
-    basis.appendChild(dl);
-  } else if (!ids.length) {
+  if (!ids.length) {
     const p = document.createElement("p"); p.className = "muted small";
     p.textContent = "本节没有关联登记编号——按模式与招标格式件写作（模板填充/附件类，或补依据后重新生成指引）。";
     basis.appendChild(p);
@@ -1020,56 +990,22 @@ function renderGuideDetail() {
   /* 素材 */
   const mat = B("写法参考 · 素材块");
   const curMat = getGuideField(key, "material") ?? (row && row.material) ?? "—";
-  if (S.guideEdit) {
-    const inp = document.createElement("input"); inp.type = "text"; inp.value = curMat;
-    inp.placeholder = "文件.docx L120-L260（多个用中文逗号分隔）；没有素材写 —，缺料写【缺：xxx】";
-    const err = document.createElement("div"); err.className = "ferr"; err.hidden = true;
-    inp.oninput = () => {
-      const v = inp.value.trim();
-      const sepBad = v && /\.docx\s+L\d+(?:-L?\d+)?\s*、/.test(v);
-      let bad = sepBad;
-      if (!bad && v && v !== "—" && v !== "【缺】") for (const tok of v.split("，")) if (!/^.+\.docx\s+L\d+(-L?\d+)?$/.test(tok.trim())) bad = true;
-      inp.classList.toggle("bad", bad); err.hidden = !bad;
-      err.textContent = bad ? (sepBad ? "多个素材区间用中文逗号「，」分隔——顿号是图示列的分隔符" : "素材记法：文件.docx L120-L260（行号区间来自解析结果）") : "";
-      if (!bad) setGuideField(key, "material", v);
-    };
-    mat.appendChild(inp); mat.appendChild(err);
-  } else {
-    if (curMat && curMat !== "—") {
-      for (const tok of curMat.split("，")) {
-        const d = document.createElement("div"); d.className = "basisrow";
-        d.innerHTML = `<span class="chip brand">${esc(tok.trim())}</span>`;
-        mat.appendChild(d);
-      }
-    } else mat.remove();
-  }
+  if (curMat && curMat !== "—") {
+    for (const tok of curMat.split("，")) {
+      const d = document.createElement("div"); d.className = "basisrow";
+      d.innerHTML = `<span class="chip brand">${esc(tok.trim())}</span>`;
+      mat.appendChild(d);
+    }
+  } else mat.remove();
   /* 图示 */
   const fig = B("图示");
   const curFig = getGuideField(key, "figure") ?? (row && row.figure) ?? "—";
-  if (S.guideEdit) {
-    const inp = document.createElement("input"); inp.type = "text"; inp.value = curFig;
-    inp.placeholder = "类型:主题（类型限 表/分层/甘特，顿号分隔）；无则 —";
-    const err2 = document.createElement("div"); err2.className = "ferr"; err2.hidden = true;
-    inp.oninput = () => {
-      const v = inp.value.trim(); let bad = false;
-      if (v && v !== "—") for (const tok of v.split("、")) if (!["表", "分层", "甘特"].includes(tok.split(":")[0])) bad = true;
-      inp.classList.toggle("bad", bad); err2.hidden = !bad;
-      err2.textContent = bad ? "图示类型词限：甘特、分层、表" : "";
-      if (!bad) setGuideField(key, "figure", v);
-    };
-    fig.appendChild(inp); fig.appendChild(err2);
-  } else {
-    if (curFig && curFig !== "—") fig.innerHTML += curFig.split("、").map(t => { const [a, b] = t.split(":"); return `<span class="chip"><b style="color:var(--brand)">${esc(a)}</b>${b ? ":" + esc(b) : ""}</span>`; }).join(" ");
-    else fig.remove();
-  }
+  if (curFig && curFig !== "—") fig.innerHTML += curFig.split("、").map(t => { const [a, b] = t.split(":"); return `<span class="chip"><b style="color:var(--brand)">${esc(a)}</b>${b ? ":" + esc(b) : ""}</span>`; }).join(" ");
+  else fig.remove();
   /* 缺口/备注 三组 */
   const note = B("公司资料 / 缺口");
   const curNote = getGuideField(key, "note") ?? (row && row.note) ?? "—";
-  if (S.guideEdit) {
-    const ta = document.createElement("textarea"); ta.value = curNote;
-    ta.oninput = () => setGuideField(key, "note", ta.value);
-    note.appendChild(ta);
-  } else {
+  {
     const groups = splitNote(curNote);
     if (!groups.missing.length && !groups.confirm.length && !groups.found.length && !groups.other.length) { note.remove(); }
     else {
@@ -1087,14 +1023,8 @@ function renderGuideDetail() {
       note.appendChild(gwrap2);
     }
   }
-  if (S.guideEdit) {
-    const del = document.createElement("button"); del.className = "btn danger sm"; del.style.marginTop = "12px";
-    del.textContent = "删除此指引行"; del.title = "删行后该节回到『未分配』状态（AI 不会写它）";
-    del.onclick = () => { S.guideRemoved[key] = true; delete S.guideDirty[key]; renderGuideDetail(); renderGuideTree(); renderGuidePills(); refreshSaveStates(); draftSoon(); };
-    host.appendChild(del);
-  }
   const hint = document.createElement("p"); hint.className = "small muted"; hint.style.marginTop = "12px";
-  hint.textContent = S.guideEdit ? "改动在点『完成编辑』保存后写入写作指引文件。" : "点右上『编辑指引』可修改本节写法（怎么写 / 依据 / 素材 / 图示）。";
+  hint.textContent = "要调整本节写法（怎么写 / 依据 / 素材 / 图示），直接在对话里说。";
   host.appendChild(hint);
 }
 function splitNote(note) {
@@ -1117,21 +1047,9 @@ function guideNodeInfo(key) {
   }
   return null;
 }
-function setGuideField(key, field, val) {
-  S.guideDirty[key] = S.guideDirty[key] || {};
-  S.guideDirty[key][field] = val;
-  refreshSaveStates(); draftSoon();
-}
 function getGuideField(key, field) {
   const d = S.guideDirty[key];
   return d ? d[field] : undefined;
-}
-$("#guide-edit-btn").onclick = () => { S.guideEdit = true; renderGuideMode(); };
-$("#guide-done-btn").onclick = () => saveAll(() => { S.guideEdit = false; renderGuideMode(); });
-function renderGuideMode() {
-  $("#guide-edit-btn").hidden = S.guideEdit; $("#guide-done-btn").hidden = !S.guideEdit;
-  $("#guide-export-btn").hidden = S.guideEdit || S.online;
-  renderGuideDetail(); renderGuideTree(); renderGuidePills();
 }
 $("#guide-search").oninput = e => { S.guideSearch = e.target.value; renderGuideTree(); };
 
@@ -1143,7 +1061,7 @@ function promiseFilled(p) {
 function renderPromises() {
   const host = $("#promises"); host.innerHTML = "";
   if (!(DATA.promise.rows || []).length) {
-    host.innerHTML = `<div class="banner info">承诺清单在写作准备阶段生成——届时这里逐项列出需要你拍板的数字：工期、项目组人员、报价口径、服务承诺等。你拍板的值会写进标书正文，并由机器逐条对账；没拍板的值不会写进正文，只在正文里留待办批注。</div>`;
+    host.innerHTML = `<div class="banner info">承诺清单在写作准备阶段生成——届时这里逐项列出需要你确认的数字：工期、项目组人员、报价口径、服务承诺等。值直接在对话里给，助手填入后本页刷新可见；你确认的值会写进标书正文，并由机器逐条对账；没确认的值不会写进正文，只在正文里留待办批注。</div>`;
     return;
   }
   for (const p of DATA.promise.rows) {
@@ -1151,7 +1069,7 @@ function renderPromises() {
     const note = (S.promiseDirty[p.item] && S.promiseDirty[p.item].note) ?? p.note ?? "";
     const card = document.createElement("div"); card.className = "promise " + (promiseFilled(p) ? "filled" : "pending");
     const head = document.createElement("div"); head.className = "head";
-    head.innerHTML = `<span class="item">${esc(p.item)}</span><span class="st">${promiseFilled(p) ? "✓ 已拍板" : "待你拍板"}</span>`;
+    head.innerHTML = `<span class="item">${esc(p.item)}</span><span class="st">${promiseFilled(p) ? "✓ 已确认" : "待你确认"}</span>`;
     card.appendChild(head);
     const body = document.createElement("div"); body.className = "body";
     const c1 = document.createElement("div"); c1.className = "col";
@@ -1159,41 +1077,14 @@ function renderPromises() {
     body.appendChild(c1);
     const c2 = document.createElement("div"); c2.className = "col";
     c2.innerHTML = `<div class="ct">你的决定</div>`;
-    if (S.promiseEdit) {
-      const inp = document.createElement("input"); inp.type = "text"; inp.value = val;
-      const err = document.createElement("div"); err.className = "ferr"; err.hidden = true;
-      const hint = document.createElement("div"); hint.className = "note"; hint.hidden = true;
-      inp.oninput = () => {
-        const bad = /[（(].{6,}[)）]/.test(inp.value) || inp.value.length > 40 || /待补|待定/.test(inp.value);
-        inp.classList.toggle("bad", bad); err.hidden = !bad;
-        err.textContent = bad ? "值列要写可独立检索的裸值（人名、数字、期限）；解释放说明列" : "";
-        if (!bad) { S.promiseDirty[p.item] = S.promiseDirty[p.item] || {}; S.promiseDirty[p.item].value = inp.value; refreshSaveStates(); draftSoon(); }
-        const filledNow = inp.value && !/待补|待定|待确认/.test(inp.value);
-        card.className = "promise " + (filledNow ? "filled" : "pending");
-        card.querySelector(".st").textContent = filledNow ? "✓ 已拍板" : "待你拍板";
-        const multi = /、/.test(inp.value);
-        hint.hidden = !multi;
-        hint.textContent = multi ? "值列含「、」：机器对账按整串检索——正文里要有一句话连续列全这些值（如名单句），否则会报「未落进正文」。" : "";
-      };
-      c2.appendChild(inp); c2.appendChild(hint); c2.appendChild(err);
-      const ninp = document.createElement("input"); ninp.type = "text"; ninp.value = note; ninp.placeholder = "备注（可选）"; ninp.style.marginTop = "6px";
-      ninp.oninput = () => { S.promiseDirty[p.item] = S.promiseDirty[p.item] || {}; S.promiseDirty[p.item].note = ninp.value; refreshSaveStates(); draftSoon(); };
-      c2.appendChild(ninp);
-    } else {
+    {
       const d = document.createElement("div"); d.style.cssText = "font-size:14px;font-weight:600;color:" + (promiseFilled(p) ? "var(--ink)" : "var(--warn)");
       d.textContent = val || "待补"; c2.appendChild(d);
+      if (!promiseFilled(p)) { const h = document.createElement("div"); h.className = "small muted"; h.style.marginTop = "4px"; h.textContent = "在对话里告诉我这一项的值"; c2.appendChild(h); }
     }
     body.appendChild(c2); card.appendChild(body); host.appendChild(card);
   }
 }
-$("#promise-edit-btn").onclick = () => { S.promiseEdit = true; renderPromiseMode(); };
-$("#promise-done-btn").onclick = () => saveAll(() => { S.promiseEdit = false; renderPromiseMode(); });
-function renderPromiseMode() {
-  $("#promise-edit-btn").hidden = S.promiseEdit; $("#promise-done-btn").hidden = !S.promiseEdit;
-  $("#promise-export-btn").hidden = S.promiseEdit || S.online;
-  renderPromises();
-}
-
 /* ================= 门 / 总览 ================= */
 function reportHref() { return API ? API + "report.html" : "招标文件分析报告.html"; }
 function renderReportEntry() {
@@ -1221,7 +1112,7 @@ function renderProgressEntry() {
   const pend = (DATA.promise.rows || []).filter(p => /待补|待确认|待定/.test(p.value || "") || !(p.value || "").trim() || p.value === "—").length;
   let stats;
   if (!total) stats = "目录定稿后这里出现写作进度。";
-  else { stats = `已写 ${written}/${total} 节 · 待拍板承诺 ${pend} 项 · 批注台账在面板里`; if (written === total) stats += "——全部章节已开写"; }
+  else { stats = `已写 ${written}/${total} 节 · 待确认承诺 ${pend} 项 · 批注清单在面板里`; if (written === total) stats += "——全部章节已开写"; }
   $("#progress-stats").textContent = stats;
 }
 function pendingPromises() { return (DATA.promise.rows || []).filter(p => !promiseFilled(p)); }
@@ -1245,7 +1136,7 @@ function renderTodos() {
   const gRows = DATA.guide.rows || [];
   const unassigned = gRows.length ? (function () { const pre = DATA.volumes.length > 1; let n = 0; for (const [vn, vv] of Object.entries(S.vol)) (function w(ns) { for (const nn of ns) { const key = pre ? vn + "/" + nn.text : nn.text; if (!nn.children.length && !["封面", "目录"].includes(nn.text) && !rowByKey(key) && !DATA.written_keys.includes(key)) n++; w(nn.children); } })(vv.nodes); return n; })() : 0;
   let any = false;
-  if (pr.length) { any = true; todo(`${pr.length} 项承诺待你拍板（工期、人员、报价口径等，拍板后写进正文）`, () => switchTab("promise"), "去拍板"); }
+  if (pr.length) { any = true; todo(`${pr.length} 项承诺待你确认（工期、人员、报价口径等，确认后写进正文）`, () => switchTab("promise"), "去确认"); }
   const chk = document.getElementById("score-check");
   if (uncov.length) {
     any = true;
@@ -1348,10 +1239,9 @@ function goOffline() {
   const c = $("#conn"); c.textContent = "离线模式"; c.classList.add("off");
   const host = $("#ov-banner"); host.innerHTML = "";
   const b = document.createElement("div"); b.className = "banner danger";
-  b.textContent = "评审台服务已断开——已切换离线模式，修改保留本页；可导出改动文件发回给助手，或让助手重启服务后刷新页面。";
+  b.textContent = "评审页面服务已断开——已切换离线模式，修改保留本页；可导出改动文件发回给助手，或让助手重启服务后刷新页面。";
   host.appendChild(b);
-  $("#guide-export-btn").hidden = false; $("#promise-export-btn").hidden = false;
-  toast("评审台服务已断开，已切换离线模式", 1);
+  toast("评审页面服务已断开，已切换离线模式", 1);
 }
 function exportPatch() {
   const patch = buildPatch();
@@ -1363,8 +1253,6 @@ function exportPatch() {
   if (navigator.clipboard) navigator.clipboard.writeText(txt).then(() => toast("改动文件已下载并复制到剪贴板——把它发给助手即可应用"), () => toast("改动文件已下载——发给助手即可应用"));
   else toast("改动文件已下载——发给助手即可应用");
 }
-$("#guide-export-btn").onclick = exportPatch;
-$("#promise-export-btn").onclick = exportPatch;
 /* 草稿 */
 let draftTimer = null;
 function draftSoon() { if (!S.online) return; clearTimeout(draftTimer); draftTimer = setTimeout(draftSave, 1500); }
@@ -1394,7 +1282,6 @@ function draftRestore() {
       for (const op of ops) try { replayOp(v, op); } catch (e) { /* 跳过失效 op */ }
       S.log[v] = ops.slice();
     }
-    S.guideDirty = dr.guideDirty || {}; S.guideRemoved = dr.guideRemoved || {}; S.promiseDirty = dr.promiseDirty || {};
     b.remove(); renderVolumes(); refreshNumbering(); renderGuideTree(); renderGuidePills(); renderPromises(); renderTodos(); refreshSaveStates();
     toast("草稿已恢复（未保存，继续编辑后点保存）");
   };
