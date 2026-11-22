@@ -13,7 +13,7 @@ examples_en:
   - "Assemble all sections into the final volume with TOC page numbers"
   - "Export a PDF preview after assembly"
   - "Check pending comments before delivery"
-version: 2.1.2
+version: 2.1.3
 author: 灵燕智能
 ---
 
@@ -53,6 +53,11 @@ Heading 1-3，缺则回落内置样式并点名）。需重建模板时跑
 @tender-review/references/review-workbench.md）。回流规则：改了节 .docx →
 重新 `assemble`；改了目录树 → 重新 `assemble`（缺失节会被点名）；改指引/承诺 →
 重跑 `tender-writing/scripts/check_writing.py` 对账。
+
+**修改入口口径与停服务联动**：本地服务收尾即 `--stop` 关停，停后评审页面链接
+失效——交付/收尾消息里修改与批注销号的入口只写 Word 批注（批注在文档里，不
+依赖服务）；用户想用页面改，给离线文件路径（`work/review/评审台.html` 浏览器
+直接打开）或重起服务命令，不把本地链接当活入口引用。
 
 ## 收尾汇报
 

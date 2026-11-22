@@ -12,8 +12,9 @@
     python3 build_dispatch.py --work work --sections "商务标/服务方案,售后服务方案"
 
 节名匹配：与写作指引「节」列同规（多册写「册名/标题」，单册裸名；也接受裸标题
-在全部卷内唯一命中的写法）。任一节名对不上指引行 → 整体报错退出，不产半批
-（拼装节与未拼装节信息不对称比失败更糟）。
+在全部卷内唯一命中的写法）。节名自带「/」（如「…身份证明/授权委托书」）按整名
+优先匹配目录叶子，「册名/」前缀只在消歧时切。任一节名对不上指引行 → 整体报错
+退出，不产半批（拼装节与未拼装节信息不对称比失败更糟）。
 
 批次文件结构（块序固定）：任务行 / 开工纪律 / 脚本绝对路径 / 今天日期 /
 逐节块【第 i 节】（输出路径·模式·图示·要求原文·素材名片·缺口原文）/
@@ -92,8 +93,13 @@ def _load_guide(work: Path) -> list[list[str]]:
 
 
 def _resolve_sections(want: list[str], guide_rows: list[list[str]],
-                      leaf_vol: dict[str, str]) -> list[tuple[str, list[str]]]:
-    """节名 → (指引行, 卷名)。错名/歧义全部收集后一次报出（不半拼）。"""
+                      leaf_vol: dict[str, str]) -> list[tuple[str, list[str], str]]:
+    """节名 → (叶子标题, 指引行, 卷名)。错名/歧义全部收集后一次报出（不半拼）。
+
+    标题解析整名优先：指引键与目录叶子逐字相等直接用（单册裸名含「/」的节，
+    如「…身份证明/授权委托书」）；不等才退回「册名/」前缀切分找叶子。切分只
+    用于定位，不改写标题——节文件名与目录逐字一致全靠这一条。
+    """
     by_key: dict[str, list[str]] = {}
     for r in guide_rows:
         by_key.setdefault(r[0].strip(), []).append(r)
@@ -118,24 +124,32 @@ def _resolve_sections(want: list[str], guide_rows: list[list[str]],
                           f"请写「册名/{name}」消歧")
             continue
         row = cand[0]
-        title = row[0].strip().rsplit("/", 1)[-1]
-        vol = leaf_vol.get(title)
-        if vol is None:
-            errors.append(f"「{row[0].strip()}」不在目录树叶子中——先对齐目录与指引")
-            continue
-        if row[0].strip() in seen:
+        key_full = row[0].strip()
+        if key_full in leaf_vol:
+            title, vol = key_full, leaf_vol[key_full]
+        else:
+            title = key_full.rsplit("/", 1)[-1]
+            vol = leaf_vol.get(title)
+            if vol is None:
+                errors.append(f"「{key_full}」不在目录树叶子中（裸名「{title}」也试过）"
+                              f"——先对齐目录与指引")
+                continue
+        if key_full in seen:
             continue  # 同一节名写两遍 → 静默去重
-        seen.add(row[0].strip())
-        picked.append((row[0].strip(), row, vol))
+        seen.add(key_full)
+        picked.append((title, row, vol))
     if errors:
         sys.exit("[派发中止] 节名对不上（整体退出，不产半批——改对名字后重跑）：\n"
                  + "\n".join(f"- {e}" for e in errors))
     return picked
 
 
-def _out_path(title: str, vol: str, multi: bool) -> str:
+def _out_path(work: Path, title: str, vol: str, multi: bool) -> str:
+    """节文件输出路径——带 work 前缀的工作区根相对路径（裸 body/ 会被按工作
+    区根解析成 <根>/body/，真机实测出过错）。"""
     base = sanitize_name(title) + ".docx"
-    return f"body/{sanitize_name(vol)}/{base}" if multi else f"body/{base}"
+    rel = f"{sanitize_name(vol)}/{base}" if multi else base
+    return f"{work.as_posix()}/body/{rel}"
 
 
 def _req_lines(basis: str, registry: dict[str, dict]) -> tuple[list[str], list[str]]:
@@ -244,12 +258,13 @@ def build(work: Path, sections_arg: str, out_dir: Path) -> Path:
                  + "——登记表与指引漂移，先重跑 check_writing.py --outline 对账")
 
     blocks: list[str] = []
-    titles = "、".join(key.rsplit("/", 1)[-1] for key, _r, _v in picked)
+    titles = "、".join(t for t, _r, _v in picked)
     blocks.append(f"【写节任务】{titles}（共 {len(picked)} 节，逐节完成：建节→注入/撰写→修订"
                   f"→跑 check_writing.py --section 自查，全节自查通过再收尾）")
     blocks.append(
-        "〔系统附：本批派发上下文（程序生成，直接使用）。开工纪律——输出路径、要求原文、"
-        "承诺值、素材名片全部在下方：开局禁止 ls/glob 探测目录；禁止检索或使用 "
+        "〔系统附：本批派发上下文（程序生成，直接使用）。开工纪律——输出路径（工作区根"
+        "相对路径，按所写路径直接用，不自拼 body/）、要求原文、承诺值、素材名片全部在下方："
+        "开局禁止 ls/glob 探测目录；禁止检索或使用 "
         "MAND/TPL/REQ/SCORE 内部编号（要求已按原文解析给出，编号不在你的语境）；"
         "无需再读写作指引/关键事实与承诺；直接从第一节开工。〕")
     blocks.append(f"脚本绝对路径：check_writing.py 在 {SCRIPTS_DIR}；"
@@ -257,9 +272,8 @@ def build(work: Path, sections_arg: str, out_dir: Path) -> Path:
                   f"（所有命令用绝对路径调用，不假设工作目录）")
     blocks.append(f"今天日期：{date.today().isoformat()}（日期只取此行，不自编）")
 
-    for i, (key, row, vol) in enumerate(picked, 1):
-        title = key.rsplit("/", 1)[-1]
-        lines = [f"【第 {i} 节：{title}】", f"输出路径：{_out_path(title, vol, multi)}",
+    for i, (title, row, vol) in enumerate(picked, 1):
+        lines = [f"【第 {i} 节：{title}】", f"输出路径：{_out_path(work, title, vol, multi)}",
                  f"写作模式：{row[1].strip() or '—'}"]
         figs = [t.strip() for t in row[4].split("、") if t.strip() and t.strip() != "—"]
         lines.append("图示清单（逐项产出，收尾对账；表=建节 body 的 table 块、分层/甘特="
@@ -281,7 +295,7 @@ def build(work: Path, sections_arg: str, out_dir: Path) -> Path:
                   "批注点名，禁止编造）：\n" + ("\n".join(promises) if promises
                                                else "  （清单缺失或为空——缺项一律批注点名，禁止编造）"))
 
-    exclude = {sanitize_name(key.rsplit("/", 1)[-1]) for key, _r, _v in picked}
+    exclude = {sanitize_name(t) for t, _r, _v in picked}
     sibs = _sibling_summaries(work, sanitize_name(picked[0][2]) if multi else "",
                               exclude)
     blocks.append("兄弟节开头摘要（避免跨节重复展开；已排除本批节）："
@@ -294,7 +308,7 @@ def build(work: Path, sections_arg: str, out_dir: Path) -> Path:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     seq = len(list(out_dir.glob("批次-*.md"))) + 1
-    slug = sanitize_name(picked[0][0].rsplit("/", 1)[-1])[:12]
+    slug = sanitize_name(picked[0][0])[:12]
     dest = out_dir / f"批次-{seq:02d}-{slug}.md"
     dest.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
     return dest

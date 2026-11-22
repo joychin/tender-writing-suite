@@ -311,7 +311,7 @@ def _load_comments(part) -> dict:
 
 def add_comment(doc: Document, para, text: str) -> int:
     part = _comments_part(doc)
-    root = _load_comments(part)
+    root = _comments_root(part)
     cid = random.randint(100000, 999999)
     while any(c.get(qn("w:id")) == str(cid) for c in root.findall(qn("w:comment"))):
         cid = random.randint(100000, 999999)
@@ -328,7 +328,7 @@ def add_comment(doc: Document, para, text: str) -> int:
     cp.append(cr)
     c.append(cp)
     root.append(c)
-    part._blob = _serialize_comments(root)
+    _comments_flush(part, root)
 
     start = OxmlElement("w:commentRangeStart")
     start.set(qn("w:id"), str(cid))
@@ -349,6 +349,45 @@ def _serialize_comments(root) -> bytes:
     from lxml import etree
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+def _comments_root(part):
+    """comments part 的可写根。python-docx ≥1.2 把磁盘上已有批注的 part 载成
+    CommentsPart（blob 每次从 _element 现序列化，改 _blob 是死存储——跨进程第二次
+    加批注 body 静默丢、锚点残留成悬空引用）：有 _element 改活树；裸 Part（本工具
+    自建形态）改 _blob。批注读写统一走这对助手，禁止直摸 part._blob。"""
+    el = getattr(part, "_element", None)
+    if el is not None:
+        return el
+    return _load_comments(part)
+
+
+def _comments_flush(part, root) -> None:
+    if getattr(part, "_element", None) is None:
+        part._blob = _serialize_comments(root)
+
+
+def _anchor_ids(el) -> set[str]:
+    """正文里实际挂着引用的批注 id 集（commentReference 是 Word 展示批注的依据）。"""
+    return {e.get(qn("w:id")) for e in el.findall(".//" + qn("w:commentReference"))}
+
+
+def _purge_orphan_bodies(doc: Document) -> int:
+    """删掉 comments part 里无任何正文锚点的批注体。revise 删段/重写会把锚点抹掉，
+    留下的体在 Word 里不可见、却随合册 _merge_comments 迁移污染整本（真机实测
+    评分索引表被页码回填抹掉 11 个锚，11 条孤儿体进了整本）。"""
+    anchored = _anchor_ids(doc.element.body)
+    removed = 0
+    for rel in doc.part.rels.values():
+        if not rel.reltype.endswith("/comments"):
+            continue
+        root = _comments_root(rel.target_part)
+        for c in list(root.findall(qn("w:comment"))):
+            if c.get(qn("w:id")) not in anchored:
+                root.remove(c)
+                removed += 1
+        _comments_flush(rel.target_part, root)
+    return removed
 
 
 def read_comments(part) -> dict[str, str]:
@@ -816,6 +855,35 @@ def _find_table(doc: Document, num: int):
     die(f"表格 T{num} 不存在")
 
 
+def _rewrite_cell_text(cell, text: str) -> None:
+    """清格重写但保留批注锚点。直接 `cell.text = ""` 会连 rangeStart/End/引用一起
+    抹掉（真机实测：评分索引表页码回填抹掉 11 个格上的批注锚，11 条孤儿体进了
+    整本）——这里只摘 run，rangeStart/End 原位保留，新文字插回批注范围之内，
+    引用 run 补回 rangeEnd 之后。"""
+    p0 = cell.paragraphs[0]
+    ids = [el.get(qn("w:id")) for el in p0._p.findall(qn("w:commentRangeStart"))]
+    for p in cell.paragraphs:
+        for r_el in p._p.findall(qn("w:r")):
+            p._p.remove(r_el)
+    for extra in list(cell.paragraphs[1:]):
+        extra._p.getparent().remove(extra._p)
+    run = p0.add_run(text)
+    style_run(run, "宋体", 10.5, False)
+    range_end = p0._p.find(qn("w:commentRangeEnd"))
+    if range_end is not None:
+        p0._p.remove(run._r)
+        range_end.addprevious(run._r)  # 新文字落回批注范围之内
+    for cid in ids:
+        ref_run = OxmlElement("w:r")
+        ref = OxmlElement("w:commentReference")
+        ref.set(qn("w:id"), cid)
+        ref_run.append(ref)
+        if range_end is not None:
+            range_end.addnext(ref_run)
+        else:
+            p0._p.append(ref_run)
+
+
 def cmd_revise(args) -> None:
     doc = Document(args.path)
     if args.cell:
@@ -864,17 +932,18 @@ def cmd_revise(args) -> None:
             die(f"{args.cell} 是竖向合并的延续位（内容在上方合并起始格）——"
                 f"请用 read 视图核对该表合并结构后改写起始格")
         cell = tbl.cell(r - 1, c - 1)
-        cell.text = ""
-        run = cell.paragraphs[0].add_run(args.text or "")
-        style_run(run, "宋体", 10.5, False)
+        _rewrite_cell_text(cell, args.text or "")
         doc.save(args.path)
         print(f"[已修订] {args.path}（{args.cell} ← {args.text[:30]}）")
         return
     para = _find_para(doc, args.para)
     if args.mode == "delete":
         para._p.getparent().remove(para._p)
+        n_orphan = _purge_orphan_bodies(doc)
         doc.save(args.path)
         print(f"[已修订] {args.path}（P{args.para} 已删除）")
+        if n_orphan:
+            print(f"  （随段删除的批注体 {n_orphan} 条已一并清掉，不留孤儿体）")
         print("  ⚠️ 段号已变化：后续 revise/image/comment 前先重新 read 取段号")
         return
     if args.mode == "insert_after":
@@ -907,10 +976,17 @@ def cmd_revise(args) -> None:
     if args.find not in old_text:
         die(f"P{args.para} 中找不到「{args.find}」（read 视图核对原文）")
     new_text = old_text.replace(args.find, args.text or "")
+    ref_ids = [el.get(qn("w:id")) for el in para._p.findall(".//" + qn("w:commentReference"))]
     for r in list(para.runs):
         r._element.getparent().remove(r._element)
     run = para.add_run(new_text)
     style_run(run, "宋体", 12, False)
+    for cid in ref_ids:  # 引用 run 随旧文字被摘，补回段尾使批注仍挂在本段
+        ref_run = OxmlElement("w:r")
+        ref = OxmlElement("w:commentReference")
+        ref.set(qn("w:id"), cid)
+        ref_run.append(ref)
+        para._p.append(ref_run)
     doc.save(args.path)
     print(f"[已修订] {args.path}（P{args.para}：{args.find[:20]} → {(args.text or '')[:20]}）")
 
@@ -940,7 +1016,117 @@ def cmd_comment(args) -> None:
         loc = f"P{args.para}"
     cid = add_comment(doc, para, args.text)
     doc.save(args.path)
-    print(f"[已批注] {args.path}（{loc}，批注 #{cid}）：{args.text[:50]}")
+    head = args.text[:50]
+    tail = "……（回显截断，批注全文已落盘）" if len(args.text) > len(head) else ""
+    print(f"[已批注] {args.path}（{loc}，批注 #{cid}）：{head}{tail}")
+
+
+def _comment_locs(doc: Document) -> dict[str, str]:
+    """批注 id → 定位串（P# 段 / T#R#C# 格），与 comment --para/--cell 同一记法，
+    comment-remove 按此回删。锚点取 commentRangeStart 所在块；段号只数非表格块
+    （与 _find_para 同口径），表格按 _find_table 的表序。"""
+    locs: dict[str, str] = {}
+    pi = ti = 0
+    for block in iter_blocks(doc):
+        if hasattr(block, "rows"):  # Table
+            ti += 1
+            for ri, row in enumerate(block.rows, 1):
+                ci = 0
+                seen: list = []  # 合并格在 row.cells 重复出现，只记一次
+                for cell in row.cells:
+                    if cell._tc in seen:
+                        continue
+                    seen.append(cell._tc)
+                    ci += 1
+                    for p in cell.paragraphs:
+                        for el in p._p.findall(qn("w:commentRangeStart")):
+                            locs[el.get(qn("w:id"))] = f"T{ti}R{ri}C{ci}"
+        else:
+            pi += 1
+            for el in block._p.findall(qn("w:commentRangeStart")):
+                locs[el.get(qn("w:id"))] = f"P{pi}"
+    return locs
+
+
+def cmd_comment_list(args) -> None:
+    doc = Document(args.path)
+    comments = doc_comments(doc)
+    if not comments:
+        print(f"[无批注] {args.path}")
+        return
+    locs = _comment_locs(doc)
+    print(f"[批注清单] {args.path}（共 {len(comments)} 条，按文档位次）")
+
+    def _order(cid: str):
+        loc = locs.get(cid, "?~")
+        kind = loc[0]
+        nums = [int(x) for x in re.findall(r"\d+", loc)] or [0]
+        return (kind, *nums, cid)
+
+    for cid in sorted(comments, key=_order):
+        print(f"  #{cid} [{locs.get(cid, '?')}] {comments[cid]}")
+    print("销号回删：comment-remove <path> --id N（可重复）/ --para P# / "
+          "--cell T#R#C# / --all；孤儿体（锚点被 revise 抹掉的批注）用 --orphan 清；"
+          "节文件删后需重新 assemble 迁移")
+
+
+def _remove_comments(doc: Document, cids: set[str]) -> None:
+    """摘掉正文锚点（range 标记 + 引用）与 comments part 条目。引用所在 run 可能
+    携带正文文字（外来批注），只摘引用元素不删整个 run，避免误伤正文。"""
+    body = doc.element.body
+    for tag in ("w:commentRangeStart", "w:commentRangeEnd"):
+        for el in list(body.findall(".//" + qn(tag))):
+            if el.get(qn("w:id")) in cids:
+                el.getparent().remove(el)
+    for ref in list(body.findall(".//" + qn("w:commentReference"))):
+        if ref.get(qn("w:id")) in cids:
+            ref.getparent().remove(ref)
+    for rel in doc.part.rels.values():
+        if rel.reltype.endswith("/comments"):
+            root = _comments_root(rel.target_part)
+            for c in list(root.findall(qn("w:comment"))):
+                if c.get(qn("w:id")) in cids:
+                    root.remove(c)
+            _comments_flush(rel.target_part, root)
+
+
+def cmd_comment_remove(args) -> None:
+    pickers = [bool(args.id), bool(args.para), bool(args.cell), args.all, args.orphan]
+    if sum(pickers) == 0:
+        die("--id / --para / --cell / --all / --orphan 至少给一个（comment-list 核对批注号）")
+    if sum(pickers) > 1:
+        die("--id/--para/--cell/--all/--orphan 互斥——一次只给一个选择器")
+    doc = Document(args.path)
+    comments = doc_comments(doc)
+    if not comments:
+        die(f"无批注可删：{args.path}")
+    if args.orphan:
+        targets = set(comments) - _anchor_ids(doc.element.body)
+        if not targets:
+            die("无孤儿批注体（批注体都有正文锚点）——不需要清理")
+    elif args.all:
+        targets = set(comments)
+    elif args.id:
+        targets = set()
+        for spec in args.id:
+            m = re.fullmatch(r"#?(\d+)", spec.strip())
+            if not m:
+                die(f"--id 格式应为数字（comment-list 回显的 #N）：{spec}")
+            targets.add(m.group(1))
+    else:
+        key = f"P{args.para}" if args.para else args.cell
+        hits = [cid for cid, loc in _comment_locs(doc).items() if loc == key]
+        if not hits:
+            die(f"{key} 上没有批注")
+        targets = set(hits)
+    unknown = sorted(targets - set(comments))
+    if unknown:
+        die(f"批注号不存在：{'、'.join('#' + c for c in unknown)}（comment-list 核对）")
+    _remove_comments(doc, targets)
+    doc.save(args.path)
+    print(f"[已删批注] {args.path}（{len(targets)} 条："
+          f"{'、'.join('#' + c for c in sorted(targets))}）；剩余 "
+          f"{len(comments) - len(targets)} 条")
 
 
 def _normalized_image(img: Path):
@@ -1661,6 +1847,7 @@ def cmd_assemble(args) -> None:
         counters: dict[int, int] = {}
         chapter_plan: list[tuple[str, int, str, bool]] = []  # (title, depth, num, in_front)
         landscape_titles: set[str] = set()  # 本册横向节文件的章标题（合册后补分节重排）
+        container_files: set[Path] = set()  # 容器章同名节文件（容器分支已点名，孤儿扫描不再重复报）
         in_front = True  # 目录节点之前=前置区
         toc_marker = None
         merged = 0
@@ -1685,6 +1872,15 @@ def cmd_assemble(args) -> None:
                 return
             num = "" if in_front else _number_scheme_leaf(depth, counters, args.numbering)
             if node["children"]:  # 容器章：占章号、产章标题（无节文件）
+                # 容器章不并入节文件——同名节文件存在即为正文丢失前兆，专项点名
+                # （只报「节点是容器」，不报「文件不在树中」：文件与目录逐字一致时
+                # 走孤儿分支会把排查引向文件名，真机实测绕了六轮）
+                sf0 = _section_file(body_dir, vol["name"], title, multi)
+                if sf0:
+                    container_files.add(sf0)
+                    warnings.append(f"容器节点「{title}」存在同名节文件 {sf0.name}——"
+                                    f"容器章不并入节文件，该节正文会丢：把其子节提升为"
+                                    f"平级使本节点成叶子，或移除该节文件")
                 if in_front:
                     # 前置区分组无章标题——不入编号与目录，仅分组提示
                     warnings.append(f"前置区容器「{title}」不占章号，其子节按前置区处理")
@@ -1742,7 +1938,7 @@ def cmd_assemble(args) -> None:
             warnings.append("目录树中无「目录」节点——未生成目录页，且全文按前置区处理（无章节编号）")
         scan_dir = body_dir / sanitize_name(vol["name"]) if multi else body_dir
         for f in sorted(scan_dir.glob("*.docx")):
-            if f.name.startswith("整本-") or f in used_files:
+            if f.name.startswith("整本-") or f in used_files or f in container_files:
                 continue
             warnings.append(f"目录外文件：{f.as_posix()}（不在目录树中，未并入）")
         # 批注迁移 + 打开自动刷新域（目录出真页码）+ 前置整节不编页码（封面/
@@ -2039,21 +2235,24 @@ def _restyle_all(master: Document, chapters: list, scheme: str) -> None:
 
 
 def _merge_comments(master: Document, used_files: set[Path]) -> int:
-    """docxcompose 迁移正文批注引用；comments part 内容在此合并（id 创建时全局唯一）。"""
+    """docxcompose 迁移正文批注引用；comments part 在此合并（id 创建时全局唯一）。
+    只并有锚点的批注体——源文件里锚点已被 revise 抹掉的孤儿体不迁移（真机实测
+    11 条孤儿体由此进整本），孤儿清理走 comment-remove --orphan 在节文件层做。"""
     existing = doc_comments(master)
     for f in used_files:
         try:
-            others = doc_comments(Document(str(f)))
+            fdoc = Document(str(f))
         except Exception:
             continue
-        for cid, text in others.items():
-            if cid in existing:
+        anchored = _anchor_ids(fdoc.element.body)
+        for cid, text in doc_comments(fdoc).items():
+            if cid in existing or cid not in anchored:
                 continue
             existing[cid] = text
     if not existing:
         return 0
     part = _comments_part(master)
-    root = _load_comments(part)
+    root = _comments_root(part)
     for c in root.findall(qn("w:comment")):
         existing.pop(c.get(qn("w:id")), None)
     for cid, text in existing.items():
@@ -2069,7 +2268,7 @@ def _merge_comments(master: Document, used_files: set[Path]) -> int:
         cp.append(cr)
         c.append(cp)
         root.append(c)
-    part._blob = _serialize_comments(root)
+    _comments_flush(part, root)
     return len(doc_comments(master))
 
 
@@ -2438,6 +2637,19 @@ def main() -> None:
     sp.add_argument("--cell", help="表格格 T1R2C3（批注落该格首段）")
     sp.add_argument("--text", required=True)
     sp.set_defaults(func=cmd_comment)
+
+    sp = sub.add_parser("comment-list", help="列出批注（id + 定位 + 全文，销号回删前核对）")
+    sp.add_argument("path")
+    sp.set_defaults(func=cmd_comment_list)
+
+    sp = sub.add_parser("comment-remove", help="删批注（销号）——--id 可重复 / --para / --cell / --all / --orphan")
+    sp.add_argument("path")
+    sp.add_argument("--id", action="append", help="批注号 #N（comment-list 回显），可重复")
+    sp.add_argument("--para", type=_para_no, default=None, help="删该段上的批注")
+    sp.add_argument("--cell", help="删该格上的批注（T1R2C3）")
+    sp.add_argument("--all", action="store_true", help="删全部批注")
+    sp.add_argument("--orphan", action="store_true", help="只删孤儿批注体（正文锚点已被 revise 抹掉的）")
+    sp.set_defaults(func=cmd_comment_remove)
 
     sp = sub.add_parser("image", help="插入图片（全宽居中）")
     sp.add_argument("path")

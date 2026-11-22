@@ -544,6 +544,7 @@ def check_guide(work: Path) -> tuple[list[str], list[str]]:
     multi = len(volumes) > 1
     expected: dict[str, str] = {}      # 全部节点（含容器章）——指引行写容器章也合法
     leaf_keys: set[str] = set()        # 仅叶子——缺行警示只对需要产文件的节
+    container_keys: set[str] = set()   # 容器章——被排了写作模式即为硬伤（正文会丢）
     for vol in volumes:
         # parse_outline 的 nodes 是扁平列表（children 恒空），须先建树再遍历层级
         def walk(ns: list[dict]) -> None:
@@ -551,6 +552,7 @@ def check_guide(work: Path) -> tuple[list[str], list[str]]:
                 key = f"{vol['name']}/{node['text']}" if multi else node["text"]
                 expected[key] = node["text"]
                 if node["children"]:
+                    container_keys.add(key)
                     walk(node["children"])
                 else:
                     leaf_keys.add(key)
@@ -574,6 +576,10 @@ def check_guide(work: Path) -> tuple[list[str], list[str]]:
         if mode not in LEGAL_MODES and not all(
                 m in {"素材修订", "格式跟随", "推理撰写"} for m in mode.split("+")):
             issues.append(f"「{key}」模式非法：{mode}（素材修订/格式跟随/推理撰写，可 + 组合；非正文节点写 —）")
+        if mode.strip() not in ("", "—") and key in container_keys:
+            issues.append(f"「{key}」在目录树中是容器章（有子节）——容器章合册只产章标题、"
+                          f"不并入节文件，按本行写的正文会整节丢失；模式只能为「—」。"
+                          f"要写正文：把其子节提升为平级使它成叶子，或把内容挪进子节行")
         if material and material != "—":
             if re.search(r"\.docx\s+L\d+(?:-L?\d+)?\s*、", material):
                 # 完整 token 后跟顿号 = 拿顿号当分隔符；文件名内含顿号（顿号在 .docx 前）不受影响

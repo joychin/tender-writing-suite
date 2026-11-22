@@ -13,7 +13,7 @@ examples_en:
   - "The outline is approved — start writing the sections"
   - "Continue with the next technical section"
   - "Run the global validation on commitments and duplication"
-version: 2.1.2
+version: 2.1.3
 author: 灵燕智能
 ---
 
