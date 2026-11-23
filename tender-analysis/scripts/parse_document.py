@@ -540,6 +540,9 @@ def print_summary(tag: str, name: str, out_root: Path, meta: dict) -> None:
 
 
 def main() -> None:
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(errors="replace")  # 中文 Windows 管道（GBK）下 ⚠️ 会编码崩，降级输出
     ap = argparse.ArgumentParser(description="招标文件解析（docx/doc/pdf/txt/md → md+outline+meta）")
     ap.add_argument("input", help="源文件路径")
     ap.add_argument("-o", "--out-dir", default="work/parse", help="输出根目录（默认 work/parse）")

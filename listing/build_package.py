@@ -237,21 +237,31 @@ def main() -> int:
             md.write_text(new, encoding="utf-8")
             n_md += 1
 
-    # ③ 改写脚本：兄弟模块解析改三形态
+    # ③ 脚本闸：依赖兄弟环节的脚本必须已是三形态源码（发货版代码存在于仓库源，
+    # 本地电池测到的才是发货版——--help 在走到 _sibling_scripts 前就退出，装配
+    # 替换曾让「单包形态复跑 --help」从没执行过发货版解析）
+    problems: list[str] = []
     n_py = 0
     for py in pkg.rglob("*.py"):
         text = py.read_text(encoding="utf-8")
+        if "_SENTINEL" in text:
+            n_py += 1
+            continue
+        if "_sibling_scripts" not in text:
+            n_py += 1  # 不做跨环节解析的脚本（docx_toolkit 本体、同目录 import 的 make_template 等）
+            continue
         new, k = SIB_OLD.subn(SIB_NEW, text)
         if k:
             py.write_text(new, encoding="utf-8")
             n_py += 1
-        elif "_SENTINEL" in text:
-            n_py += 1
+            problems.append(f"{py.relative_to(pkg)}: 兄弟解析仍是双形态源码（包内已临时替换）"
+                            f"——把三形态版本回写仓库源后再打包")
+        else:
+            problems.append(f"{py.relative_to(pkg)}: 依赖兄弟环节但未找到解析段（_sibling_scripts）")
     for cache in pkg.rglob("__pycache__"):
         shutil.rmtree(cache, ignore_errors=True)
 
     # ④ 校验
-    problems: list[str] = []
     files = [f for f in sorted(pkg.rglob("*")) if f.is_file()]
     for f in files:
         rel = f.relative_to(pkg)

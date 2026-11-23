@@ -33,17 +33,24 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-# 环节间共享模块解析（双形态）：先按五技能平级找 ../<环节>，再按上架单包找
-# ../stages/<环节>（环节收在 stages/ 下的单技能包），都缺才报错
-_STAGE_ROOT = Path(__file__).resolve().parent.parent
+# 环节间共享模块解析（三形态）：单技能扁平包（全部环节脚本同目录）→ 五技能
+# 平级 ../<环节> → stages/<环节> 收纳布局；都缺才报错。
+# 本段是发货源码：打包器不再装配时替换——本地电池测到的就是发货版。
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_STAGE_ROOT = _SCRIPTS_DIR.parent
+_SENTINEL = {"tender-docx": "docx_toolkit.py", "tender-writing": "check_writing.py"}
 
 
 def _sibling_scripts(name: str) -> Path:
-    for cand in (_STAGE_ROOT.parent / name, _STAGE_ROOT.parent / "stages" / name):
+    if (_SCRIPTS_DIR / _SENTINEL[name]).is_file():
+        return _SCRIPTS_DIR
+    for cand in (_STAGE_ROOT.parent / name, _STAGE_ROOT / "stages" / name):
         scripts = cand / "scripts"
         if scripts.is_dir():
             return scripts
-    raise SystemExit(f"缺少兄弟环节 {name}（平级与 stages/ 单包形态均未找到）：{_STAGE_ROOT.parent}")
+    raise SystemExit(
+        f"缺少兄弟环节 {name}（单包 / 平级 / stages 三形态均未找到）：{_STAGE_ROOT.parent}"
+    )
 
 
 _DOCX_SCRIPTS = _sibling_scripts("tender-docx")
@@ -315,6 +322,9 @@ def build(work: Path, sections_arg: str, out_dir: Path) -> Path:
 
 
 def main() -> None:
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(errors="replace")  # 中文 Windows 管道（GBK）下 ⚠️ 会编码崩，降级输出
     ap = argparse.ArgumentParser(description="第五步并行分派批次提示词拼装器")
     ap.add_argument("--work", default="work")
     ap.add_argument("--sections", required=True, help="节名清单（逗号分隔；多册写「册名/标题」）")

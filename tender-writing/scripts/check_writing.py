@@ -27,23 +27,31 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-# 环节间共享模块解析（双形态）：先按五技能平级找 ../<环节>，再按上架单包找
-# ../stages/<环节>（环节收在 stages/ 下的单技能包），都缺才报错
-_STAGE_ROOT = Path(__file__).resolve().parent.parent
+# 环节间共享模块解析（三形态）：单技能扁平包（全部环节脚本同目录）→ 五技能
+# 平级 ../<环节> → stages/<环节> 收纳布局；都缺才报错。
+# 本段是发货源码：打包器不再装配时替换——本地电池测到的就是发货版。
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_STAGE_ROOT = _SCRIPTS_DIR.parent
+_SENTINEL = {"tender-docx": "docx_toolkit.py", "tender-writing": "check_writing.py"}
 
 
 def _sibling_scripts(name: str) -> Path:
-    for cand in (_STAGE_ROOT.parent / name, _STAGE_ROOT.parent / "stages" / name):
+    if (_SCRIPTS_DIR / _SENTINEL[name]).is_file():
+        return _SCRIPTS_DIR
+    for cand in (_STAGE_ROOT.parent / name, _STAGE_ROOT / "stages" / name):
         scripts = cand / "scripts"
         if scripts.is_dir():
             return scripts
-    raise SystemExit(f"缺少兄弟环节 {name}（平级与 stages/ 单包形态均未找到）：{_STAGE_ROOT.parent}")
+    raise SystemExit(
+        f"缺少兄弟环节 {name}（单包 / 平级 / stages 三形态均未找到）：{_STAGE_ROOT.parent}"
+    )
 
 
 _DOCX_SCRIPTS = _sibling_scripts("tender-docx")
 sys.path.append(str(_DOCX_SCRIPTS))
 from docx_toolkit import (  # noqa: E402
-    build_tree, iter_blocks, parse_outline, require_docx, sanitize_name,
+    build_tree, cell_text_full, iter_blocks, para_text_full, parse_outline,
+    require_docx, sanitize_name,
 )
 
 # python-docx 惰性加载：顶层 import 会让未装依赖的环境（沙箱评测、纯净解释器）
@@ -156,10 +164,10 @@ def docx_text(path: Path) -> tuple[str, list[tuple[str, str]]]:
                     if any(cell._tc is t for t in seen):
                         continue
                     seen.append(cell._tc)
-                    labeled.append((f"T{ti}R{ri}C{ci}", cell.text))
+                    labeled.append((f"T{ti}R{ri}C{ci}", cell_text_full(cell)))
             continue
         pi += 1
-        labeled.append((f"P{pi}", block.text))
+        labeled.append((f"P{pi}", para_text_full(block._p)))
     return "\n".join(t for _, t in labeled), labeled
 
 
@@ -750,6 +758,51 @@ def check_section(work: Path, section: Path) -> tuple[list[str], list[str]]:
 
 # ---------------------------------------------------------------- 全局
 
+def deviation_gaps(gdocs: dict, work: Path) -> list[str]:
+    """偏离表完整性（warning 级，报告不是门）：响应列空行点名 + 与 REQ 登记条数对账。
+
+    偏离表缺商务条款靠人工发现的事故：REQ 登记表是偏离表逐条响应的数据源，
+    行数对不上即有条款没进偏离表；表内响应列留空在评标时按漏项处理。"""
+    analysis = work / "analysis"
+    req_ids: set[str] = set()
+    if analysis.is_dir():
+        for fname in ANALYSIS_FILES:
+            p = analysis / fname
+            if not p.is_file():
+                continue
+            for row in table_rows(p.read_text(encoding="utf-8")):
+                if row and ID_RE.match(row[0] or "") and row[0][:3].upper() == "REQ":
+                    req_ids.add(row[0].upper())
+    n_rows = 0
+    empties: list[str] = []
+    for pname, gdoc in gdocs.items():
+        for ti, tbl in enumerate(gdoc.tables, 1):
+            if not tbl.rows:
+                continue
+            header = [cell_text_full(c).strip() for c in tbl.rows[0].cells]
+            if not any("偏离" in h for h in header):
+                continue
+            resp_cols = [i for i, h in enumerate(header)
+                         if ("响应" in h or "说明" in h) and "要求" not in h and "条款" not in h]
+            if not resp_cols:
+                continue
+            for ri, row in enumerate(tbl.rows[1:], 1):
+                cells = [cell_text_full(c).strip() for c in row.cells]
+                n_rows += 1
+                if any(not cells[i] for i in resp_cols if i < len(cells)):
+                    empties.append(f"{pname} T{ti} 第{ri} 行")
+    warnings: list[str] = []
+    if empties:
+        more = "…" if len(empties) > 3 else ""
+        warnings.append(f"偏离表 {len(empties)} 行响应列未填写（{'、'.join(empties[:3])}{more}）"
+                        f"——空响应在评标时按漏项处理，逐条补齐")
+    if req_ids and n_rows < len(req_ids):
+        warnings.append(f"偏离表仅 {n_rows} 行，REQ 登记表 {len(req_ids)} 条——差 "
+                        f"{len(req_ids) - n_rows} 条未逐条响应（对照 requirements-*.md 核商务与"
+                        f"格式条款是否漏进偏离表）")
+    return warnings
+
+
 def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]]:
     issues: list[str] = []
     warnings: list[str] = []
@@ -804,6 +857,9 @@ def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]
                 issues.append(f"{p.name} 指引缺口/备注列声明了待补或批注待办，节内 0 条 Word 批注"
                               f"——缺料处逐点补批注；缺口已解决的先同步清理指引缺口列")
             warnings += figure_gaps(p.name, row, gdoc, fallback=True)
+
+    # 偏离表完整性（报告不是门）：响应列空行 + 与 REQ 登记条数对账
+    warnings += deviation_gaps(gdocs, work)
 
     # 承诺比对 + 旧值快照（清单值变更时旧值自动纳入残留扫描）
     promise_path = body_dir / "关键事实与承诺.md"
@@ -915,6 +971,9 @@ def _stage_gate(work: Path) -> None:
 
 
 def main() -> None:
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(errors="replace")  # 中文 Windows 管道（GBK）下 ⚠️ 会编码崩，降级输出
     ap = argparse.ArgumentParser(description="正文机器校验")
     ap.add_argument("--work", default="work")
     ap.add_argument("--guide", action="store_true", help="校验写作指引")

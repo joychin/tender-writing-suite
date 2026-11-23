@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import random
 import re
 import sys
@@ -47,7 +48,7 @@ R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 DGM_NS = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
 COMMENTS_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"
 RESERVED_NAMES = {"写作指引.md", "关键事实与承诺.md"}
-SELF_NUMBERED = re.compile(r"^\s*[（(]?[一二三四五六七八九十百\d]+\s*[、.．）)]")
+SELF_NUMBERED = re.compile(r"^\s*(?:[（(]?[一二三四五六七八九十百\d]+\s*[、.．）)]|[①-⑳])")
 ILLEGAL = re.compile(r'[/\\:*?"<>|\n\r]')
 
 
@@ -130,6 +131,25 @@ def _cn(n: int) -> str:
     return str(n)
 
 
+_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+
+
+def _gov_label(depth: int, c: dict) -> str:
+    """gov 形态各层编号（公文惯例：一、/（一）/1./（1）/①，第 5 层起封顶 ⑳）。
+    chapter/decimal 的深层都是「.」拼接形态，gov 深层若同形（第 3/4 层都出「1.」）
+    层级就不可读；节内小标题按同函数续编，不再做「num.strip() + '.' + sub」的
+    字符串拼接（曾拼出「2..1」「（二）.1」）。"""
+    if depth == 1:
+        return f"{_cn(c.get(1, 1))}、"
+    if depth == 2:
+        return f"（{_cn(c.get(2, 1))}）"
+    if depth == 3:
+        return f"{c.get(3, 1)}. "
+    if depth == 4:
+        return f"（{c.get(4, 1)}）"
+    return _CIRCLED[min(c.get(depth, 1), 20) - 1]
+
+
 def set_east_asia(rpr_holder, east: str) -> None:
     rpr = rpr_holder.get_or_add_rPr()
     rfonts = rpr.get_or_add_rFonts()
@@ -143,6 +163,215 @@ def style_run(run, east="宋体", size=None, bold=None):
         run.font.size = Pt(size)
     if bold is not None:
         run.font.bold = bold
+
+
+# ---------------------------------------------------------------- 中文字体归一
+
+# 主题字体属性（w:asciiTheme 等）按 OOXML 规定优先于同名显式字体属性：样式里
+# 两套并存时，显式设的「黑体」会被顶掉，实际取主题字体。主题东亚分支又由
+# settings.xml 的 themeFontLang/@eastAsia 决定——python-docx 自带模板写的是
+# ja-JP，于是标题落到日文分支（ＭＳ 明朝/ゴシック），简体缺字再逐字回退，
+# 一行标题混排两种字体。开发机往往没装日文字体、渲染时静默回退，肉眼看不出来，
+# 所以加载模板后一律归一到中文主题语言并摘掉越权的主题字体属性。
+THEME_FONT_ATTRS = (("w:asciiTheme", "w:ascii"), ("w:hAnsiTheme", "w:hAnsi"),
+                   ("w:eastAsiaTheme", "w:eastAsia"), ("w:cstheme", "w:cs"))
+CJK_THEME_LANG = "zh-CN"
+# themeFontLang 在 CT_Settings 里是定序元素：缺该元素时插在第一个后继之前。
+# 后继清单按 schema 顺序，取本模块可能遇到的几个（中间的 caption/smartTagType 等
+# 极少出现，缺了它们落到 append 也更安全）。
+_AFTER_THEME_LANG = (
+    "w:clrSchemeMapping", "w:doNotIncludeSubdocsInStats", "w:doNotAutoCompressPictures",
+    "w:forceUpgrade", "w:captions", "w:readModeInkLockDown", "w:smartTagType",
+    "w:shapeDefaults", "w:doNotEmbedSmartTags", "w:decimalSymbol", "w:listSeparator",
+)
+
+
+def clear_theme_fonts(rpr_holder) -> bool:
+    """摘掉被显式字体顶替的主题字体属性（返回是否改动）。
+
+    逐对处理：`w:eastAsia` 在就删 `w:eastAsiaTheme`——显式值是明确意图，主题属性
+    只是同层越权覆盖它。只有主题属性、没有显式值的样式（Heading 5、Title 之类）
+    原样保留：它们本就该跟主题走，而主题语言已归一到简体中文分支。
+    """
+    rpr = rpr_holder.find(qn("w:rPr"))
+    if rpr is None:
+        return False
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        return False
+    changed = False
+    for theme_attr, explicit_attr in THEME_FONT_ATTRS:
+        if rfonts.get(qn(explicit_attr)) is not None and rfonts.get(qn(theme_attr)) is not None:
+            del rfonts.attrib[qn(theme_attr)]
+            changed = True
+    return changed
+
+
+def _set_theme_font_lang(settings_el) -> str | None:
+    """把 settings 的主题语言归一到 zh-CN，返回原值（无改动返回 None）。"""
+    el = settings_el.find(qn("w:themeFontLang"))
+    if el is None:
+        el = OxmlElement("w:themeFontLang")
+        el.set(qn("w:val"), "en-US")
+        anchor = None
+        for tag in _AFTER_THEME_LANG:
+            anchor = settings_el.find(qn(tag))
+            if anchor is not None:
+                break
+        if anchor is not None:
+            anchor.addprevious(el)
+        else:
+            settings_el.append(el)
+    old = el.get(qn("w:eastAsia"))
+    if old == CJK_THEME_LANG:
+        return None
+    el.set(qn("w:eastAsia"), CJK_THEME_LANG)
+    return old or "(未设)"
+
+
+def _set_doc_lang(styles_el) -> bool:
+    """docDefaults 的校对语言改中文（不影响字体，只影响拼写检查与断词）。"""
+    lang = styles_el.find(f'{qn("w:docDefaults")}/{qn("w:rPrDefault")}/'
+                          f'{qn("w:rPr")}/{qn("w:lang")}')
+    if lang is None or lang.get(qn("w:eastAsia")) == CJK_THEME_LANG:
+        return False
+    lang.set(qn("w:eastAsia"), CJK_THEME_LANG)
+    return True
+
+
+def ensure_cjk_theme(doc: Document) -> list[str]:
+    """把主题东亚语言归一到简体中文，并摘掉显式样式上越权的主题字体属性。
+
+    内置模板与用户模板都要过一遍：用户模板多半也源自 python-docx 或英文版 Word，
+    同样带着 ja-JP 的 themeFontLang。返回的说明行供调用方回显。
+    """
+    notes: list[str] = []
+    old = _set_theme_font_lang(doc.settings.element)
+    if old:
+        notes.append(f"主题东亚语言 {old} → {CJK_THEME_LANG}")
+    cleared: list[str] = []
+    for st in doc.styles.element.findall(qn("w:style")):
+        name = st.get(qn("w:styleId")) or "?"
+        if clear_theme_fonts(st):
+            cleared.append(name)
+    if cleared:
+        notes.append("摘除主题字体属性：" + "、".join(cleared))
+    if _set_doc_lang(doc.styles.element):
+        notes.append(f"校对语言 → {CJK_THEME_LANG}")
+    return notes
+
+
+_A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+
+
+def _theme_parts(doc: Document) -> list:
+    """package 里的主题部件（word/theme/theme*.xml；themeFontLang 管不到的层）。"""
+    try:
+        return [p for p in doc.part.package.iter_parts()
+                if str(getattr(p, "partname", "")).startswith("/word/theme/")]
+    except Exception:
+        return []
+
+
+def _set_theme_ea(doc: Document) -> int:
+    """theme 的东亚字形显式化：majorFont→黑体、minorFont→宋体。
+
+    东亚分支为空 typeface 时，西文主题仍会兜住东亚解析（真机三层根因之二），
+    光归一 themeFontLang 压不住。返回改动的 theme 部件数。"""
+    n = 0
+    for part in _theme_parts(doc):
+        try:
+            from lxml import etree
+
+            root = etree.fromstring(part.blob)
+        except Exception:
+            continue
+        changed = False
+        for scheme_tag, face in ((_A_NS + "majorFont", "黑体"), (_A_NS + "minorFont", "宋体")):
+            for scheme in root.iter(scheme_tag):
+                ea = scheme.find(_A_NS + "ea")
+                if ea is None:
+                    ea = etree.SubElement(scheme, _A_NS + "ea")
+                    latin = scheme.find(_A_NS + "latin")
+                    if latin is not None:  # schema 定序：ea 跟在 latin 之后
+                        latin.addnext(ea)
+                if not (ea.get("typeface") or "").strip():
+                    ea.set("typeface", face)
+                    changed = True
+        if changed:
+            part._blob = etree.tostring(root, xml_declaration=True,
+                                        encoding="UTF-8", standalone=True)
+            n += 1
+    return n
+
+
+# run 级东亚字体固化的样式族映射：标题/封面族→黑体，其余→宋体（setup_styles 同一套口径）
+_HEADING_FONT_KEYS = ("Heading", "标题", "Cover", "Title")
+
+
+def _iter_all_paragraphs(doc: Document):
+    """正文段 + 表格格段（含嵌套表）+ 页眉页脚段——run 级后处理要覆盖的全部段落。"""
+
+    def _tbl(tbl):
+        for row in tbl.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    yield p
+                for nested in cell.tables:
+                    yield from _tbl(nested)
+
+    for p in doc.paragraphs:
+        yield p
+    for t in doc.tables:
+        yield from _tbl(t)
+    for sec in doc.sections:
+        for hf in (sec.header, sec.footer, sec.first_page_header, sec.first_page_footer,
+                   sec.even_page_header, sec.even_page_footer):
+            try:
+                for p in hf.paragraphs:
+                    yield p
+            except Exception:
+                continue
+
+
+def _solidify_fonts(doc: Document) -> list[str]:
+    """合册终稿字体固化（无条件执行）：theme 东亚字形补显式 + 样式层归一 + run 级固化。
+
+    模板会被 skill 更新/重装覆盖，单靠模板归一不保险；copy-from 拷入的历史标书
+    run 还带着 w:*Theme 越权属性或缺失 eastAsia，主题解析最终仍可能落到日文分支
+    （真机整本混排 ＭＳ 明朝 的三层根因）。终稿后处理三层齐下，让字体问题在
+    交付面上不可能复发。返回说明行供回显。"""
+    notes: list[str] = []
+    n_theme = _set_theme_ea(doc)
+    if n_theme:
+        notes.append(f"主题东亚字形补显式 {n_theme} 处")
+    notes += ensure_cjk_theme(doc)
+    stripped = filled = 0
+    for p in _iter_all_paragraphs(doc):
+        try:
+            sname = (p.style.name if p.style is not None else "") or ""
+        except Exception:
+            sname = ""
+        face = "黑体" if any(k in sname for k in _HEADING_FONT_KEYS) else "宋体"
+        for r in p.runs:
+            rpr = r._element.rPr
+            if rpr is None:
+                continue  # 无 rPr 的 run 全靠样式继承——归一过的样式层已安全
+            rf = rpr.find(qn("w:rFonts"))
+            if rf is None:
+                continue
+            for theme_attr, _ in THEME_FONT_ATTRS:
+                if rf.get(qn(theme_attr)) is not None:
+                    del rf.attrib[qn(theme_attr)]  # 主题属性优先于显式字体，终稿一律剥掉
+                    stripped += 1
+            if rf.get(qn("w:eastAsia")) is None:
+                rf.set(qn("w:eastAsia"), face)
+                filled += 1
+    if stripped:
+        notes.append(f"摘 run 级主题字体属性 {stripped} 处")
+    if filled:
+        notes.append(f"run 级东亚字体固化 {filled} 处")
+    return notes
 
 
 # ---------------------------------------------------------------- 基础版式
@@ -204,6 +433,26 @@ def setup_styles(doc: Document) -> None:
     cap.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
     cap.paragraph_format.first_line_indent = Pt(0)
 
+    # 目录条目独立样式：单倍行距是硬要求——目录挂 Normal（1.5 倍距）会被行距类
+    # 版式调整整页整页地放大（真机 15 页→12 页的教训）；独立样式也让版式压缩
+    # 有明确的跳过目标。按级左缩进，一级加粗。
+    for lvl in range(1, 5):
+        name = f"TOC {lvl}"
+        try:
+            toc_st = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+        except ValueError:
+            toc_st = doc.styles[name]
+        toc_st.font.name = "宋体"
+        toc_st.font.size = Pt(12)
+        toc_st.font.bold = (lvl == 1)
+        set_east_asia(toc_st.element, "宋体")
+        toc_st.paragraph_format.line_spacing = 1.0
+        toc_st.paragraph_format.first_line_indent = Pt(0)
+        toc_st.paragraph_format.left_indent = Cm(0.74 * (lvl - 1))
+
+    ensure_cjk_theme(doc)
+    _set_theme_ea(doc)
+
 
 DEFAULT_TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "base-template.docx"
 
@@ -263,6 +512,10 @@ def base_document(template: str | None = None) -> tuple[Document, bool]:
         doc = Document(str(path))
         _strip_body_content(doc)
         _ensure_builtin_styles(doc)
+        notes = ensure_cjk_theme(doc)
+        if notes and user_template:
+            print("[模板中文字体] " + "；".join(notes)
+                  + f"（模板 {path.name} 的主题字体语言会顶掉显式中文字体，已归一）")
         return doc, user_template
     if user_template:
         die(f"模板文件不存在：{path}")
@@ -440,6 +693,20 @@ def doc_comments(doc: Document) -> dict[str, str]:
 
 # ---------------------------------------------------------------- 块枚举
 
+def para_text_full(p_el) -> str:
+    """段落全文：含超链接、修订插入（w:ins）里的文字，不含修订删除（w:del）里的文字。
+
+    python-docx 的 paragraph.text 只遍历段落的直接 w:r——超链接里的 run 和修订
+    插入容器里的 run 都不在其中，read/revise/校验全部因此看漏文字（历史标书的
+    修订痕迹段落曾整句不可见）。全文口径统一走本函数。"""
+    out = []
+    for t in p_el.iter(qn("w:t")):
+        if any(a.tag in (qn("w:del"), qn("w:moveFrom")) for a in t.iterancestors()):
+            continue
+        out.append(t.text or "")
+    return "".join(out)
+
+
 def iter_blocks(doc: Document):
     from docx.table import Table
     from docx.text.paragraph import Paragraph
@@ -449,6 +716,11 @@ def iter_blocks(doc: Document):
             yield Paragraph(child, doc)
         elif child.tag == qn("w:tbl"):
             yield Table(child, doc)
+
+
+def cell_text_full(cell) -> str:
+    """单元格全文（含超链接/修订插入文字）。"""
+    return "\n".join(para_text_full(p._p) for p in cell.paragraphs)
 
 
 def para_images(p) -> int:
@@ -464,6 +736,21 @@ def cmd_create(args) -> None:
     path = Path(args.path)
     if path.exists() and not args.replace:
         die(f"节文件已存在：{path}（重写请加 --replace）")
+    existed = path.exists()
+    dropped_comments = 0
+    if existed and args.replace:
+        try:
+            old = Document(str(path))
+        except Exception:
+            old = None
+        if old is not None:
+            n_comments = len(doc_comments(old))
+            if n_comments and not args.drop_comments:
+                die(f"节文件已有 {n_comments} 条批注，覆盖会静默丢掉——确认后加 --drop-comments 重跑，"
+                    f"或先用 comment-remove 逐条销号", 2)
+            dropped_comments = n_comments
+            if old.element.body.findall(".//" + qn("a:blip")):
+                print("  ⚠️ 覆盖会丢弃节内已插图——重写后需 image 重新插入")
     doc, _ = base_document(args.template)
     if getattr(args, "landscape", False):
         sec = doc.sections[0]
@@ -507,7 +794,9 @@ def cmd_create(args) -> None:
         # 补空段会在合册分页后顶出空白页（真机实测一册 3 处空白页皆源于此）
     path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(path))
-    tag = "已覆盖" if args.replace and path.exists() else "已建节"
+    tag = "已覆盖" if existed else "已建节"
+    if dropped_comments:
+        print(f"  （--drop-comments：已按指示丢弃原批注 {dropped_comments} 条）")
     print(f"[{tag}] {path}（段落 {n_p}、表格 {n_t}）")
 
 
@@ -689,7 +978,7 @@ def _make_tr(specs: list[tuple[str, int, str | None]], col_w: list[int], *,
         r.append(rpr)
         t = OxmlElement("w:t")
         t.set(qn("xml:space"), "preserve")
-        t.text = text[:200]
+        t.text = text  # 不截断：静默丢字是标书事故，超长提示在 _emit_table_inner 里给出
         r.append(t)
         p.append(r)
         tc.append(p)
@@ -726,6 +1015,14 @@ def _emit_table_inner(doc: Document, blk: dict) -> None:
         return
     if grid_w > 16:
         raise ValueError(f"表格列数超限（{grid_w} 列，上限 16）——列更多的表请拆表或精简列")
+    # 超长单元格点名（旧版 t.text=text[:200] 静默截断是标书事故，200 字以上提示行列位）
+    for rn, specs in enumerate([*([hspecs] if hspecs else []), *rspecs], 1):
+        pos = 0
+        for t, span, vm in specs:
+            if span == 1 and vm is None and len(t) > 200:
+                print(f"  ⚠️ 单元格超长（第 {rn} 行第 {pos + 1} 列，共 {len(t)} 字）"
+                      f"——已按全文生成，窄列会折多行")
+            pos += span
     if strict:
         for rn, specs in enumerate(rspecs, start=2 if hspecs else 1):
             if sum(s for _, s, _ in specs) != grid_w:
@@ -837,7 +1134,10 @@ def cmd_read(args) -> None:
                     elif prev_row_tcs is not None and any(tc is t for t in prev_row_tcs):
                         cells.append("同上")
                     else:
-                        cells.append(" ".join(cell.text.split())[:60])
+                        norm = " ".join(cell_text_full(cell).split())
+                        # 截到 200 字防刷屏，但标出总字数——60 字静默截断曾让
+                        # 长参数单元格在 read 视图里显得完整，模型无从发现丢失
+                        cells.append(norm[:200] + (f"（共 {len(norm)} 字）" if len(norm) > 60 else ""))
                     prev_tc = tc
                     tcs.append(tc)
                 prev_row_tcs = tcs
@@ -857,7 +1157,7 @@ def cmd_read(args) -> None:
         except Exception:
             sname = ""
         tag = f"（{sname}）" if sname.startswith(("Heading", "Cover", "标题")) else ""
-        print(f"[P{pi}]{tag}{marks}{block.text}")
+        print(f"[P{pi}]{tag}{marks}{para_text_full(block._p)}")
 
 
 # ---------------------------------------------------------------- revise
@@ -890,13 +1190,24 @@ def _rewrite_cell_text(cell, text: str) -> None:
     引用 run 补回 rangeEnd 之后。"""
     p0 = cell.paragraphs[0]
     ids = [el.get(qn("w:id")) for el in p0._p.findall(qn("w:commentRangeStart"))]
+    keep_rpr = None  # 该格首个显式格式：格式件填空沿用原格式（仿宋 14pt 加粗下划线的
+    # 空格曾被写成宋体 10.5，同一张表里填过的和没填的字体不一致）；空格无 run 就不写
+    for p in cell.paragraphs:
+        for r_el in p._p.findall(qn("w:r")):
+            rp = r_el.find(qn("w:rPr"))
+            if rp is not None:
+                keep_rpr = _deepcopy(rp)
+                break
+        if keep_rpr is not None:
+            break
     for p in cell.paragraphs:
         for r_el in p._p.findall(qn("w:r")):
             p._p.remove(r_el)
     for extra in list(cell.paragraphs[1:]):
         extra._p.getparent().remove(extra._p)
     run = p0.add_run(text)
-    style_run(run, "宋体", 10.5, False)
+    if keep_rpr is not None:
+        run._element.insert(0, keep_rpr)
     range_end = p0._p.find(qn("w:commentRangeEnd"))
     if range_end is not None:
         p0._p.remove(run._r)
@@ -913,6 +1224,8 @@ def _rewrite_cell_text(cell, text: str) -> None:
 
 
 def cmd_revise(args) -> None:
+    if not args.cell and not args.para:
+        die("需要 --para P# 或 --cell T#R#C#（read 视图核对坐标）")
     doc = Document(args.path)
     if args.cell:
         m = re.match(r"T(\d+)R(\d+)C(\d+)$", args.cell, re.I)
@@ -947,6 +1260,11 @@ def cmd_revise(args) -> None:
             tc = tbl.cell(r - 1, c - 1)._tc
         except Exception:
             die(f"格 {args.cell} 越界（该表 {len(tbl.rows)} 行 × {len(tbl.columns)} 列）")
+        # 合并区坐标解析回承载格后写入并点名（旧版「延续位」守卫是死代码——
+        # tbl.cell() 已把延续位解析回起始格，die 永远不触发）
+        anch = _grid_anchor(tbl, r, c)
+        if anch is not None and (anch[0] != r or anch[1] != c):
+            print(f"  （{args.cell} 位于合并区，已写入承载格 T{t}R{anch[0]}C{anch[1]}）")
         # 合并格守卫：跨列合并行的延续位写入会静默落到锚点格（实测页码错进组行），
         # 竖向合并延续位写入会落进看不见的续格——都直接拦下并指路
         row_tcs = tbl.rows[r - 1].cells
@@ -1000,15 +1318,40 @@ def cmd_revise(args) -> None:
     # replace
     if not args.find:
         die("replace 需要 --find 旧文本")
-    old_text = para.text
-    if args.find not in old_text:
+    new_s = args.text or ""
+    hit_runs = [r for r in para.runs if args.find in r.text]
+    if hit_runs:
+        # 命中落在直接 run 内：只改该 run——同段其余 run（加粗引题等）的格式原样，
+        # 本 run 的 rPr 也不动（旧版整段重写成宋体 12pt，标题被顶成正文样式）
+        for r in hit_runs:
+            r.text = r.text.replace(args.find, new_s)
+        doc.save(args.path)
+        print(f"[已修订] {args.path}（P{args.para}：{args.find[:20]} → {new_s[:20]}）")
+        return
+    full = para_text_full(para._p)
+    if args.find not in full:
         die(f"P{args.para} 中找不到「{args.find}」（read 视图核对原文）")
-    new_text = old_text.replace(args.find, args.text or "")
+    new_text = full.replace(args.find, new_s)
     ref_ids = [el.get(qn("w:id")) for el in para._p.findall(".//" + qn("w:commentReference"))]
-    for r in list(para.runs):
-        r._element.getparent().remove(r._element)
+    fmt_rpr = None  # 首个「文字 run」的显式格式：跳过只装批注引用的 run 与已删除文字；
+    # 取「首个带格式的 run」会把整段染成该 run 的格式（实测加粗扩散），故按文字 run 取
+    for r_el in para._p.iter(qn("w:r")):
+        if r_el.find(qn("w:t")) is None or \
+                any(a.tag in (qn("w:del"), qn("w:moveFrom")) for a in r_el.iterancestors()):
+            continue
+        rp = r_el.find(qn("w:rPr"))
+        fmt_rpr = _deepcopy(rp) if rp is not None else None
+        break
+    for r_el in list(para._p.iter(qn("w:r"))):
+        r_el.getparent().remove(r_el)
+    for el in list(para._p):
+        # 摘掉超链接/修订容器等全部非文字结构（旧版漏摘 w:hyperlink，新旧文字重复）；
+        # 批注范围标记保留，引用 run 在下方补回
+        if el.tag not in (qn("w:pPr"), qn("w:commentRangeStart"), qn("w:commentRangeEnd")):
+            para._p.remove(el)
     run = para.add_run(new_text)
-    style_run(run, "宋体", 12, False)
+    if fmt_rpr is not None:  # 无显式格式就不写 rPr——继承段落样式，标题不被抹成宋体 12
+        run._element.insert(0, fmt_rpr)
     for cid in ref_ids:  # 引用 run 随旧文字被摘，补回段尾使批注仍挂在本段
         ref_run = OxmlElement("w:r")
         ref = OxmlElement("w:commentReference")
@@ -1049,31 +1392,73 @@ def cmd_comment(args) -> None:
     print(f"[已批注] {args.path}（{loc}，批注 #{cid}）：{head}{tail}")
 
 
-def _comment_locs(doc: Document) -> dict[str, str]:
-    """批注 id → 定位串（P# 段 / T#R#C# 格），与 comment --para/--cell 同一记法，
-    comment-remove 按此回删。锚点取 commentRangeStart 所在块；段号只数非表格块
-    （与 _find_para 同口径），表格按 _find_table 的表序。"""
+def _row_grid(row):
+    """一行的物理格清单 [(tc, 起始网格列1基, 跨列数, vMerge)]——合并行的坐标解析基准。"""
+    grid = []
+    pos = 0
+    for tc in row._tr.findall(qn("w:tc")):
+        tcpr = tc.find(qn("w:tcPr"))
+        span = 1
+        vm = None
+        if tcpr is not None:
+            gs = tcpr.find(qn("w:gridSpan"))
+            if gs is not None:
+                span = int(gs.get(qn("w:val")) or 1)
+            v = tcpr.find(qn("w:vMerge"))
+            if v is not None:
+                vm = v.get(qn("w:val")) or "continue"
+        grid.append((tc, pos + 1, span, vm))
+        pos += span
+    return grid
+
+
+def _grid_anchor(tbl, r: int, c: int) -> tuple[int, int] | None:
+    """请求格坐标 (1基) → 承载内容的物理格坐标 (1基行, 1基起始网格列)。
+
+    合并区（横向/竖向）的任意坐标都解析回锚点格——与 comment --cell 写入时的
+    tbl.cell() 解析同一语义；旧版 comment-list 按「唯一格序」报坐标，横向合并行
+    会差一位、竖向合并会落到最下面的延续行，销号时对不上。行越界返回 None。"""
+    if r < 1 or r > len(tbl.rows):
+        return None
+    for tc, start, span, vm in _row_grid(tbl.rows[r - 1]):
+        if start <= c < start + span:
+            if vm == "continue":  # 竖向合并延续格：向上找同列的 restart 行
+                for rr in range(r - 1, 0, -1):
+                    for tc2, start2, span2, vm2 in _row_grid(tbl.rows[rr - 1]):
+                        if start2 <= c < start2 + span2:
+                            if vm2 == "restart":
+                                return rr, start2
+                            break  # 同列非 restart（畸形）：就地返回请求行
+                return r, start
+            return r, start
+    return r, c  # 列越界：原样返回，交由上层报「上没有批注」
+
+
+def _comment_locs(doc: Document) -> tuple[dict[str, str], dict[str, tuple[int, int]]]:
+    """批注 id → (定位串, 文档位次)。定位串与 comment --cell 同一记法（合并区解析回
+    锚点格的起始网格列），comment-remove 按此回删；文档位次按块序（P 与 T 按
+    真实文档顺序交错），comment-list 排序用——旧版先段落后表格的「位次」与文档
+    顺序不一致。"""
     locs: dict[str, str] = {}
+    order: dict[str, tuple[int, int, int]] = {}
     pi = ti = 0
-    for block in iter_blocks(doc):
+    for bi, block in enumerate(iter_blocks(doc), 1):
         if hasattr(block, "rows"):  # Table
             ti += 1
             for ri, row in enumerate(block.rows, 1):
-                ci = 0
-                seen: list = []  # 合并格在 row.cells 重复出现，只记一次
-                for cell in row.cells:
-                    if cell._tc in seen:
-                        continue
-                    seen.append(cell._tc)
-                    ci += 1
-                    for p in cell.paragraphs:
-                        for el in p._p.findall(qn("w:commentRangeStart")):
-                            locs[el.get(qn("w:id"))] = f"T{ti}R{ri}C{ci}"
+                for gi, (tc, start, span, vm) in enumerate(_row_grid(row)):
+                    for p in tc.findall(qn("w:p")):
+                        for el in p.findall(qn("w:commentRangeStart")):
+                            cid = el.get(qn("w:id"))
+                            locs[cid] = f"T{ti}R{ri}C{start}"
+                            order[cid] = (bi, ri, gi)  # 块序+行序+格序：跨行位次可比较
         else:
             pi += 1
             for el in block._p.findall(qn("w:commentRangeStart")):
-                locs[el.get(qn("w:id"))] = f"P{pi}"
-    return locs
+                cid = el.get(qn("w:id"))
+                locs[cid] = f"P{pi}"
+                order[cid] = (bi, 0, 0)
+    return locs, order
 
 
 def cmd_comment_list(args) -> None:
@@ -1082,16 +1467,10 @@ def cmd_comment_list(args) -> None:
     if not comments:
         print(f"[无批注] {args.path}")
         return
-    locs = _comment_locs(doc)
+    locs, order = _comment_locs(doc)
     print(f"[批注清单] {args.path}（共 {len(comments)} 条，按文档位次）")
 
-    def _order(cid: str):
-        loc = locs.get(cid, "?~")
-        kind = loc[0]
-        nums = [int(x) for x in re.findall(r"\d+", loc)] or [0]
-        return (kind, *nums, cid)
-
-    for cid in sorted(comments, key=_order):
+    for cid in sorted(comments, key=lambda c: (order.get(c, (10 ** 9,)), c)):
         print(f"  #{cid} [{locs.get(cid, '?')}] {comments[cid]}")
     print("销号回删：comment-remove <path> --id N（可重复）/ --para P# / "
           "--cell T#R#C# / --all；孤儿体（锚点被 revise 抹掉的批注）用 --orphan 清；"
@@ -1128,6 +1507,7 @@ def cmd_comment_remove(args) -> None:
     comments = doc_comments(doc)
     if not comments:
         die(f"无批注可删：{args.path}")
+    locs, _order = _comment_locs(doc)
     if args.orphan:
         targets = set(comments) - _anchor_ids(doc.element.body)
         if not targets:
@@ -1142,8 +1522,19 @@ def cmd_comment_remove(args) -> None:
                 die(f"--id 格式应为数字（comment-list 回显的 #N）：{spec}")
             targets.add(m.group(1))
     else:
-        key = f"P{args.para}" if args.para else args.cell
-        hits = [cid for cid, loc in _comment_locs(doc).items() if loc == key]
+        if args.para:
+            key = f"P{args.para}"
+        else:
+            m = re.match(r"T(\d+)R(\d+)C(\d+)$", args.cell or "", re.I)
+            if not m:
+                die(f"--cell 格式应为 T1R2C3：{args.cell}")
+            t, r, c = (int(x) for x in m.groups())
+            tbl = _find_table(doc, t)
+            anch = _grid_anchor(tbl, r, c)
+            if anch is None:
+                die(f"行越界：{args.cell}（该表 {len(tbl.rows)} 行）")
+            key = f"T{t}R{anch[0]}C{anch[1]}"  # 合并区坐标解析回锚点格再查
+        hits = [cid for cid, loc in locs.items() if loc == key]
         if not hits:
             die(f"{key} 上没有批注")
         targets = set(hits)
@@ -1225,6 +1616,218 @@ def cmd_image(args) -> None:
         note += "，题注已加"
     doc.save(args.path)
     print(f"[已插图] {args.path}（{img.name}，全宽居中{note}）")
+
+
+# ---------------------------------------------------------------- 版式压缩（compact）
+
+def max_font_pt(p, default: float = 12.0) -> float:
+    """段内最大字号（磅）——run 未显式设字号按 Normal 缺省 12。"""
+    best = 0.0
+    for r in p.runs:
+        sz = r.font.size
+        best = max(best, sz.pt if sz is not None else default)
+    return best or default
+
+
+def has_image(p) -> bool:
+    """段内是否含图——exact 行距会把图裁成一条，压缩的硬保护判据。"""
+    return para_images(p) > 0
+
+
+def cmd_compact(args) -> None:
+    """正文段固定行距压缩。两条保护常开不可关（可预测可预防的事故不靠事后补救）：
+    大字号段（字号×1.2 超行距即压扁风险，36pt 封面标题事故）与含图段一律跳过，
+    TOC 样式段（目录单倍行距是独立样式族的硬约定）跳过。表格与页眉页脚不动。"""
+    from docx.enum.text import WD_LINE_SPACING
+
+    doc = Document(args.docx)
+    applied = big = img = toc_skipped = 0
+    for p in doc.paragraphs:
+        sname = (p.style.name if p.style is not None else "") or ""
+        if sname.replace(" ", "").upper().startswith("TOC"):
+            toc_skipped += 1
+            continue
+        if not p.text.strip() and not has_image(p):
+            continue  # 空段是格式件的结构间隔，压了无收益还添乱
+        if has_image(p):
+            img += 1
+            continue
+        if max_font_pt(p) * 1.2 > args.line_pt:
+            big += 1
+            continue
+        pf = p.paragraph_format
+        pf.line_spacing = Pt(args.line_pt)
+        pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+        applied += 1
+    doc.save(args.docx)
+    print(f"[版式压缩] 固定行距 {args.line_pt:g}pt：正文段 {applied}；保护跳过——"
+          f"大字号 {big} 段、含图 {img} 段、目录 {toc_skipped} 段（保护常开不可关）")
+
+
+# ---------------------------------------------------------------- 图片体检（image-scan / image-rotate）
+
+def _image_rels(doc: Document) -> list:
+    """文档主部件的图片关系，按媒体文件名排序——scan 与 rotate 的序号基准一致。"""
+    return sorted((rel for rel in doc.part.rels.values() if rel.reltype.endswith("/image")),
+                  key=lambda r: str(r.target_part.partname))
+
+
+def _blip_ref_counts(doc: Document) -> dict:
+    """各图片关系被引用次数（正文 + 页眉页脚的 a:blip r:embed / v:imagedata r:id）。"""
+    from collections import Counter
+
+    counts = Counter()
+    parts = [doc.part]
+    for sec in doc.sections:
+        for hf in (sec.header, sec.footer, sec.first_page_header, sec.first_page_footer,
+                   sec.even_page_header, sec.even_page_footer):
+            try:
+                parts.append(hf.part)
+            except Exception:
+                continue
+    for part in parts:
+        for el in part.element.iter():
+            if el.tag == qn("a:blip"):
+                rid = el.get(qn("r:embed"))
+            elif el.tag == f"{{{V_NS}}}imagedata":  # VML 前缀不在 python-docx nsmap 里，qn() 会 KeyError
+                rid = el.get(qn("r:id"))
+            else:
+                continue
+            if rid:
+                counts[rid] += 1
+    return counts
+
+
+def cmd_image_scan(args) -> None:
+    """导出全部内嵌图片的缩略图网格：证件方向自动判定不可靠（行投影分不出
+    0°/180°，OSD 在证件上误判率高），人眼扫网格最快——63 张证件 9 张错向的
+    人工成本大头。网格文件名带序号，错了记序号走 image-rotate 修。"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        die("缺少依赖：Pillow。请先执行：pip install Pillow", 2)
+    docx_path = Path(args.docx)
+    if not docx_path.is_file():
+        die(f"文件不存在：{docx_path}")
+    doc = Document(str(docx_path))
+    rels = _image_rels(doc)
+    if not rels:
+        die("文档内没有图片（先 image 插入，或经 copy-from 带图拷贝）")
+    counts = _blip_ref_counts(doc)
+    infos = []
+    for i, rel in enumerate(rels, 1):
+        part = rel.target_part
+        w = h = 0
+        try:
+            with Image.open(io.BytesIO(part.blob)) as im:
+                w, h = im.size
+        except Exception:
+            pass
+        infos.append((i, str(part.partname).rsplit("/", 1)[-1], w, h,
+                      counts.get(rel.rId, 0), part))
+    print(f"[图片清单] {docx_path.name} 共 {len(infos)} 张（序号供 image-rotate 用）：")
+    for i, fname, w, h, n, _part in infos:
+        mark = "" if n else "（未被引用）"
+        print(f"  #{i} {fname} {w}x{h} 引用 {n} 次{mark}")
+    out_dir = Path(args.out) if args.out else docx_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    thumb, cols, pad, label_h = args.thumb, args.cols, 10, 22
+    per_sheet = cols * 6
+    pages = [infos[i:i + per_sheet] for i in range(0, len(infos), per_sheet)]
+    made = 0
+    for pi, page in enumerate(pages, 1):
+        rows = (len(page) + cols - 1) // cols
+        cw, ch = thumb + pad * 2, thumb + pad * 2 + label_h
+        sheet = Image.new("RGB", (cw * cols, ch * rows), "white")
+        draw = ImageDraw.Draw(sheet)
+        font = ImageFont.load_default()  # 位图字体：标签是 ASCII（#1 400x200），无需中文字体
+        for j, (i, fname, w, h, n, part) in enumerate(page):
+            x0, y0 = (j % cols) * cw, (j // cols) * ch
+            try:
+                with Image.open(io.BytesIO(part.blob)) as im:
+                    im.thumbnail((thumb, thumb))
+                    if im.mode not in ("RGB", "L"):
+                        im = im.convert("RGB")
+                    sheet.paste(im, (x0 + (cw - im.width) // 2,
+                                     y0 + (ch - label_h - im.height) // 2))
+            except Exception:
+                draw.text((x0 + pad, y0 + pad), "N/A", fill="red", font=font)
+            draw.text((x0 + pad, y0 + ch - label_h - 2), f"#{i} {w}x{h}",
+                      fill="black", font=font)
+        sheet.save(out_dir / f"图片清单-{docx_path.stem}-{pi:02d}.png")
+        made += 1
+    print(f"[已导出] {made} 张缩略图网格 → {out_dir}（人工核对方向，记序号走 image-rotate 修）")
+
+
+def _swap_extents(doc: Document, rids: set, swap: bool) -> int:
+    """引用给定图片关系的图形尺寸改为旋转后口径：90°/270° 交换 wp:extent 与
+    a:xfrm/a:ext 的 cx/cy（同一媒体被多处引用全部重算）；180° 尺寸不变只计数。
+    死坑：旋转后不按新比例重算 extent，Word 会按旧宽高渲染——拉伸变形。"""
+    n = 0
+    parts = [doc.part]
+    for sec in doc.sections:
+        for hf in (sec.header, sec.footer, sec.first_page_header, sec.first_page_footer,
+                   sec.even_page_header, sec.even_page_footer):
+            try:
+                parts.append(hf.part)
+            except Exception:
+                continue
+    for part in parts:
+        for blip in part.element.iter(qn("a:blip")):
+            if blip.get(qn("r:embed")) not in rids:
+                continue
+            anchor = blip
+            while anchor is not None and anchor.tag not in (qn("wp:inline"), qn("wp:anchor")):
+                anchor = anchor.getparent()
+            if anchor is None:
+                continue
+            exts = [anchor.find(qn("wp:extent"))]
+            exts += anchor.findall(f".//{qn('a:xfrm')}/{qn('a:ext')}")
+            for ext in exts:
+                if ext is None:
+                    continue
+                cx, cy = ext.get("cx"), ext.get("cy")
+                if swap and cx and cy:
+                    ext.set("cx", cy)
+                    ext.set("cy", cx)
+                n += 1
+    return n
+
+
+def cmd_image_rotate(args) -> None:
+    """按 image-scan 序号就地旋转图片（证件方向人工核出错向后的修复动作）。"""
+    try:
+        from PIL import Image
+    except ImportError:
+        die("缺少依赖：Pillow。请先执行：pip install Pillow", 2)
+    docx_path = Path(args.docx)
+    doc = Document(str(docx_path))
+    rels = _image_rels(doc)
+    if not (1 <= args.index <= len(rels)):
+        die(f"图片序号越界：#{args.index}（共 {len(rels)} 张——序号以 image-scan 输出为准）")
+    rel = rels[args.index - 1]
+    part = rel.target_part
+    fname = str(part.partname).rsplit("/", 1)[-1]
+    try:
+        im = Image.open(io.BytesIO(part.blob))
+    except Exception:
+        die(f"无法解码 {fname}（WMF/EMF 矢量图不支持就地旋转）——导出后外部处理再插回")
+    fmt = im.format if im.format in ("PNG", "JPEG", "BMP", "GIF") else None
+    if fmt is None:
+        die(f"图片格式 {im.format or '未知'} 不支持就地旋转（支持 PNG/JPEG/BMP/GIF）")
+    fixed = im.transpose({90: Image.ROTATE_90, 180: Image.ROTATE_180,
+                          270: Image.ROTATE_270}[args.deg])
+    buf = io.BytesIO()
+    fixed.save(buf, format=fmt)
+    part._blob = buf.getvalue()
+    # 同一媒体可能被多处引用：所有指向该部件的关系都要重算 extent
+    rids = {r.rId for r in doc.part.rels.values()
+            if r.reltype.endswith("/image") and r.target_part is part}
+    n_ext = _swap_extents(doc, rids, swap=(args.deg in (90, 270)))
+    doc.save(str(docx_path))
+    print(f"[已旋转] #{args.index} {fname} {args.deg}°（{im.width}x{im.height} → "
+          f"{fixed.width}x{fixed.height}，重算引用处 extent {n_ext} 处——"
+          f"不按新比例重算会拉伸变形）")
 
 
 def _parse_pages(spec: str, n_pages: int) -> list[int]:
@@ -1317,14 +1920,17 @@ def cmd_copy_from(args) -> None:
     warn_numpr = False
     img_copied = 0
     img_skipped: list[str] = []
+    clean: dict[str, int] = {}
     for e in selected:
         if e[0] >= len(blocks):
             continue
         blk = blocks[e[0]]
         el = blk._p if hasattr(blk, "_p") else blk._tbl
-        clone, n_img, skipped = _clone_with_images(el, src_doc, tgt_doc)
+        clone, n_img, skipped, st = _clone_with_images(el, src_doc, tgt_doc)
         img_copied += n_img
         img_skipped.extend(skipped)
+        for k, v in st.items():
+            clean[k] = clean.get(k, 0) + v
         for pstyle in clone.findall(".//" + qn("w:pStyle")):
             sid = pstyle.get(qn("w:val"))
             if sid and sid not in tgt_style_ids and sid in src_stem_map:
@@ -1347,6 +1953,8 @@ def cmd_copy_from(args) -> None:
               "该位置已留空，不会产生坏图引用")
     if warn_numpr:
         print("  ⚠️ 拷入内容含 Word 自动编号段落——标题类编号由合册剥除，正文列表编号保留")
+    if any(clean.values()):
+        print(f"  （已清理源文件痕迹：{_fmt_stats(clean)}）")
 
 
 def _deepcopy(el):
@@ -1357,6 +1965,90 @@ def _deepcopy(el):
 
 V_NS = "urn:schemas-microsoft-com:vml"
 R_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+
+# ---------------------------------------------------------------- 痕迹清理（copy-from / 合册共用）
+#
+# 历史标书的段落常带修订痕迹（w:ins/w:del 带作者日期）、批注锚点、超链接——原样
+# 拷进节文件后：修订痕迹直接进递交稿；锚点失去批注体成悬空引用；超链接的关系号
+# 不重挂会撞上目标文件同号关系（实测指向页脚部件）。copy-from 拷贝与 assemble
+# 打开节文件都走同一套清理。
+
+_COPY_UNWRAP = ("w:ins", "w:moveTo")  # 接受插入：解包容器、内容原位保留
+_COPY_DROP = (                        # 接受删除 / 摘锚点 / 摘修订元数据
+    "w:del", "w:moveFrom",
+    "w:moveFromRangeStart", "w:moveFromRangeEnd", "w:moveToRangeStart", "w:moveToRangeEnd",
+    "w:commentRangeStart", "w:commentRangeEnd", "w:commentReference",
+    "w:footnoteReference", "w:endnoteReference",
+    "w:rPrChange", "w:pPrChange", "w:sectPrChange", "w:tblPrChange", "w:tblGridChange",
+    "w:trPrChange", "w:tcPrChange", "w:numberingChange", "w:cellIns", "w:cellDel",
+    "w:cellMerge",
+    "w:customXmlInsRangeStart", "w:customXmlInsRangeEnd",
+    "w:customXmlDelRangeStart", "w:customXmlDelRangeEnd",
+)
+
+
+def _sanitize_element(el, src_doc: Document, tgt_doc: Document,
+                      keep_anchors: set[str] | None = None) -> dict[str, int]:
+    """对一棵元素树接受修订、摘批注/脚注锚、重挂超链接。返回各项计数。
+
+    keep_anchors=None：锚点全摘（copy-from 场景——批注体不随片段走，留下的都是悬空锚）；
+    传 id 集合：集合内的锚保留（assemble 场景——节文件自带的待办批注锚+体同在，要照常迁移）。"""
+    n: dict[str, int] = {"接受插入": 0, "接受删除": 0, "摘批注锚": 0,
+                         "重挂外链": 0, "摘坏引用": 0}
+    for tag in _COPY_UNWRAP:
+        for holder in list(el.iter(qn(tag))):
+            parent = holder.getparent()
+            if parent is None:
+                continue
+            idx = parent.index(holder)
+            for child in list(holder):
+                parent.insert(idx, child)
+                idx += 1
+            parent.remove(holder)
+            n["接受插入"] += 1
+    for tag in _COPY_DROP:
+        for x in list(el.iter(qn(tag))):
+            if keep_anchors is not None and tag.startswith("w:comment") \
+                    and x.get(qn("w:id")) in keep_anchors:
+                continue
+            x.getparent().remove(x)
+            if tag == "w:del":
+                n["接受删除"] += 1
+            elif tag in ("w:commentRangeStart", "w:commentReference"):
+                n["摘批注锚"] += 1
+    for r_el in list(el.iter(qn("w:r"))):  # 摘引用后只剩 rPr 的空 run
+        if r_el.find(qn("w:t")) is None and r_el.find(qn("w:br")) is None \
+                and r_el.find(qn("w:tab")) is None \
+                and not r_el.findall(qn("w:drawing")) \
+                and all(c.tag == qn("w:rPr") for c in r_el):
+            r_el.getparent().remove(r_el)
+    for hl in list(el.iter(qn("w:hyperlink"))):
+        rid = hl.get(R_ID)
+        if not rid:
+            continue
+        try:
+            rel = src_doc.part.rels[rid]
+        except KeyError:
+            hl.attrib.pop(R_ID, None)
+            n["摘坏引用"] += 1
+            continue
+        if rel.is_external:
+            hl.set(R_ID, tgt_doc.part.relate_to(rel.target_ref, rel.reltype, is_external=True))
+            n["重挂外链"] += 1
+        else:
+            hl.attrib.pop(R_ID, None)  # 文档内链走 w:anchor，不依赖关系号
+    return n
+
+
+def _sanitize_doc(doc: Document) -> dict[str, int]:
+    """整文档接受修订；批注锚只摘「无批注体」的悬空锚——文件自带的待办批注
+    （锚+体同在）保留，照常迁移进整本。改的是内存树，落盘由调用方定。"""
+    anchored = set(doc_comments(doc))
+    return _sanitize_element(doc.element.body, doc, doc, keep_anchors=anchored)
+
+
+def _fmt_stats(n: dict[str, int]) -> str:
+    return "、".join(f"{k} {v}" for k, v in n.items() if v)
 
 
 def _add_image_part(doc, blob: bytes):
@@ -1379,9 +2071,9 @@ def _drop_shape(node) -> None:
 
 
 def _clone_with_images(el, src_doc, tgt_doc):
-    """深拷贝元素并把图片重挂到目标文档；返回 (clone, 成功图片数, 跳过清单)。
+    """深拷贝元素并把图片重挂到目标文档；返回 (clone, 成功图片数, 跳过清单, 清理计数)。
     DrawingML（a:blip）与 VML（v:imagedata）双通道；EMF/WMF 等 python-docx 不认的
-    格式按张跳过并记录，不中断整条拷贝。"""
+    格式按张跳过并记录，不中断整条拷贝。拷贝后统一接受修订/摘锚/重挂链接。"""
     import copy
 
     clone = copy.deepcopy(el)
@@ -1415,7 +2107,8 @@ def _clone_with_images(el, src_doc, tgt_doc):
     for rel_ids in clone.findall(".//" + "{%s}relIds" % DGM_NS):
         skipped.append("SmartArt 图形")
         _drop_shape(rel_ids)
-    return clone, ok, skipped
+    stats = _sanitize_element(clone, src_doc, tgt_doc)
+    return clone, ok, skipped, stats
 
 
 # ---------------------------------------------------------------- diagram（matplotlib 真图，字体探测回落）
@@ -1833,13 +2526,37 @@ def _number_scheme_leaf(depth: int, counters: dict, scheme: str) -> str:
         return f"第{_cn(counters[1])}章　" if depth == 1 else \
             ".".join(str(counters[k]) for k in range(1, depth + 1)) + " "
     if scheme == "gov":
-        if depth == 1:
-            return f"{_cn(counters[1])}、"
-        if depth == 2:
-            return f"（{_cn(counters[2])}）"
-        return f"{counters[depth]}. "
+        return _gov_label(depth, counters)
     # decimal
     return ".".join(str(counters[k]) for k in range(1, depth + 1)) + " "
+
+
+def _remap_section_ids(doc: Document, taken: set[str]) -> tuple[set[str], int]:
+    """合册前把与本册已占用批注号冲突的锚就地换号（复制节文件当模板的撞号形态：
+    两个节文件同号时 _merge_comments 只并一条体，第二节锚挂着第一节的文字）。
+    锚与批注体同改、落回节文件，_merge_comments 读盘自然一致。
+    返回 (更新后的占用集, 换号数)。"""
+    ids = {e.get(qn("w:id")) for e in doc.element.body.iter(qn("w:commentReference"))}
+    mapping: dict[str, str] = {}
+    for cid in sorted(ids):
+        if cid in taken:
+            new = str(random.randint(1_000_000, 99_999_999))
+            while new in taken or new in ids or new in mapping.values():
+                new = str(random.randint(1_000_000, 99_999_999))
+            mapping[cid] = new
+    if mapping:
+        for tag in ("w:commentRangeStart", "w:commentRangeEnd", "w:commentReference"):
+            for e in doc.element.body.iter(qn(tag)):
+                if e.get(qn("w:id")) in mapping:
+                    e.set(qn("w:id"), mapping[e.get(qn("w:id"))])
+        for rel in doc.part.rels.values():
+            if rel.reltype.endswith("/comments"):
+                for cbody in _comments_root(rel.target_part).findall(qn("w:comment")):
+                    if cbody.get(qn("w:id")) in mapping:
+                        cbody.set(qn("w:id"), mapping[cbody.get(qn("w:id"))])
+    taken |= ids - set(mapping)
+    taken |= set(mapping.values())
+    return taken, len(mapping)
 
 
 def cmd_assemble(args) -> None:
@@ -1876,12 +2593,23 @@ def cmd_assemble(args) -> None:
         chapter_plan: list[tuple[str, int, str, bool]] = []  # (title, depth, num, in_front)
         landscape_titles: set[str] = set()  # 本册横向节文件的章标题（合册后补分节重排）
         container_files: set[Path] = set()  # 容器章同名节文件（容器分支已点名，孤儿扫描不再重复报）
+        taken_ids: set[str] = set()  # 本册已占用的批注号（跨节撞号就地重排）
+        # 同名叶子点名：不同章节下的同名节共用同一节文件（body/ 按 <节名>.docx 找），
+        # 内容会在整本里重复出现——目录树设计常见误区，点名让用户确认
+        name_counts: dict[str, int] = {}
+        for n in vol["nodes"]:
+            if not n["children"]:
+                name_counts[n["text"]] = name_counts.get(n["text"], 0) + 1
+        for k, v in name_counts.items():
+            if v > 1:
+                warnings.append(f"目录树中有 {v} 个同名节「{k}」——不同章节下的同名节共用同一节文件，"
+                                f"内容会重复出现，确认目录树设计是否如此")
         in_front = True  # 目录节点之前=前置区
         toc_marker = None
         merged = 0
 
         def _emit_node(node, depth):
-            nonlocal in_front, toc_marker, merged
+            nonlocal in_front, toc_marker, merged, taken_ids
             title = node["text"]
             if title == "封面":
                 sf = _section_file(body_dir, vol["name"], title, multi)
@@ -1934,6 +2662,18 @@ def cmd_assemble(args) -> None:
                         landscape_titles.add(title)
                 except Exception:
                     pass
+                # 节文件可能被人工在 Word 里开着修订改过：整本是递交稿，痕迹与悬空锚
+                # 在此统一接受/清理并落回节文件（幂等——重新合册不再重复点名）
+                st = _sanitize_doc(sub_doc)
+                # 跨节批注号撞号：冲突锚就地换号（体同改），落盘后 _merge_comments 读盘一致
+                n_remap = 0
+                if sub_doc.element.body.findall(".//" + qn("w:commentReference")):
+                    taken_ids, n_remap = _remap_section_ids(sub_doc, taken_ids)
+                if any(st.values()) or n_remap:
+                    sub_doc.save(str(sf))
+                if any(st.values()):
+                    warnings.append(f"节文件「{title}」含修订痕迹/批注锚——已接受修订并清理"
+                                    f"（{_fmt_stats(st)}），整本按清理后内容合并")
                 composer.append(sub_doc)
                 used_files.add(sf)
             else:
@@ -1956,10 +2696,11 @@ def cmd_assemble(args) -> None:
             _emit_node(top, 1)
         toc_end = None
         if toc_marker is not None:
-            toc_end = _fill_toc(master, toc_marker, toc_entries)
-        _restyle_all(master, chapter_plan, args.numbering)
+            toc_end = _fill_toc(master, toc_marker, toc_entries, args.toc_depth)
+        _restyle_all(master, chapter_plan, args.numbering, args.flat_outline)
         _apply_body_indents(master)
         _clear_table_cell_indents(master)
+        font_notes = _solidify_fonts(master)
         _apply_landscape_regions(master, chapter_plan, landscape_titles)
         # 孤儿节文件点名（多册只扫本册子目录，单册扫 body 根）
         if not any(n["text"] == "目录" for n in vol["nodes"]):
@@ -1980,6 +2721,8 @@ def cmd_assemble(args) -> None:
         composer.save(str(out_path))
         print(f"[已合册] {out_path}（合并 {merged} 节，编号 {args.numbering}，"
               f"批注 {n_comments} 条待处理）")
+        if font_notes:
+            print("  [字体固化] " + "；".join(font_notes))
         print("  对用户口径：整本 Word 文档已生成（「合册」是内部动作，"
               "不进对话、不作提问——reply-style 硬规则 9）。")
         for w in warnings:
@@ -2109,9 +2852,11 @@ def _enable_update_fields(doc: Document) -> None:
         settings.insert(0, uf)
 
 
-def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]):
+def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]],
+              depth_limit: int = 3):
     """在目录标题段之后插入静态条目（TOC 域包裹；条目带点线制表位——
     未更新域前也有目录观感，Word/WPS 打开经 updateFields 刷新出真页码）。
+    depth_limit 控制条目层级与域刷新口径（\\o "1-N"，静态条目同深度截断）。
     返回目录块结束锚点=视觉末条目段（域 end 并入该段）——合册分节符直接挂在
     它身上，目录页归前置节、不带页码；不产生任何尾随空段（空段会在目录页
     近满时溢出成无页脚空白页，把 toc-pages 的页码推算顶歪一位——实测教训）。"""
@@ -2119,6 +2864,9 @@ def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]):
     from docx.text.paragraph import Paragraph
 
     if marker is None or not entries:
+        return None
+    entries = [e for e in entries if e[1] <= depth_limit]
+    if not entries:
         return None
 
     def _insert_after(el, ref):
@@ -2129,17 +2877,24 @@ def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]):
     for text, depth, missing in reversed(entries):
         p = _insert_after(OxmlElement("w:p"), marker)
         entry = Paragraph(p, master)
-        entry.paragraph_format.first_line_indent = Pt(0)
-        entry.paragraph_format.left_indent = Cm(0.74 * max(0, depth - 1))
+        toc_st = _get_style(master, f"TOC {depth}")
+        if toc_st is not None:
+            entry.style = toc_st  # 独立样式：单倍行距+按级缩进，版式压缩跳过它
+        else:  # 用户模板无 TOC 样式族 → 直排格式兜底
+            entry.paragraph_format.first_line_indent = Pt(0)
+            entry.paragraph_format.left_indent = Cm(0.74 * max(0, depth - 1))
         entry.paragraph_format.tab_stops.add_tab_stop(
             Cm(14.4), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
         label = text + ("（另附）" if missing else "") + "\t"
         run = entry.add_run(label)
-        style_run(run, "宋体", 12, depth == 1)
+        if toc_st is None:
+            style_run(run, "宋体", 12, depth == 1)
         if p_last is None:
             p_last = p
         p_first = p
-    # TOC 域包裹静态清单：begin+instr+separate 插到第一条目的 pPr 之后
+    # TOC 域包裹静态清单：begin+instr+separate 插到第一条目的 pPr 之后。
+    # 域指令不带 \\h——LibreOffice/WPS 会把目录条目渲染成下划线超链接（真机坑）；
+    # 刷新口径与静态条目同截断到 depth_limit，F9 刷新不丢已显示的层级。
     first = p_first
     base = 1 if first.find(qn("w:pPr")) is not None else 0
     fld = OxmlElement("w:r")
@@ -2149,7 +2904,7 @@ def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]]):
     instr = OxmlElement("w:r")
     it = OxmlElement("w:instrText")
     it.set(qn("xml:space"), "preserve")
-    it.text = ' TOC \\o "1-3" \\h \\z \\u '
+    it.text = f' TOC \\o "1-{depth_limit}" \\z \\u '
     instr.append(it)
     sep = OxmlElement("w:r")
     fc2 = OxmlElement("w:fldChar")
@@ -2195,13 +2950,16 @@ def _chap_match(text: str, title: str) -> bool:
     return t == title.strip() or t.endswith(title.strip())
 
 
-def _restyle_all(master: Document, chapters: list, scheme: str) -> None:
-    """单遍重排：depth≥2 章标题降一级；节内小标题按树深度降级 + 接续节号 +
-    摘出导航大纲（outlineLvl 9，不进目录/导航窗格）。扁平目录（节直接挂册下，
-    depth=1）的节内小标题同样编号（10.1 式——chapter 方案的章号是「第十章」
-    汉字形态，前缀须换 counters 的阿拉伯章号拼）。章标题与计划错位（节文件缺
-    失/被删，整本中留空位）时按标题在剩余计划内向后对位，跳过缺章继续接续
-    小标题编号；完全对不上才中断该章的小标题处理。"""
+def _restyle_all(master: Document, chapters: list, scheme: str,
+                 flat_outline: bool = False) -> None:
+    """单遍重排：depth≥2 章标题降一级；节内小标题按树深度降级 + 接续节号。
+    导航大纲默认继承 Heading 样式层级（导航窗格出树形、TOC 域刷新不丢子级）；
+    flat_outline=True 时直写 outlineLvl=9 摘出导航（导航降噪的特殊场景，显式
+    选入——代价是导航全扁平、F9 刷目录丢二级以下条目）。扁平目录（节直接挂
+    册下，depth=1）的节内小标题同样编号（10.1 式——chapter 方案的章号是
+    「第十章」汉字形态，前缀须换 counters 的阿拉伯章号拼）。章标题与计划错位
+    （节文件缺失/被删，整本中留空位）时按标题在剩余计划内向后对位，跳过缺章
+    继续接续小标题编号；完全对不上才中断该章的小标题处理。"""
     idx = 0
     cur: tuple[str, int, bool, str] | None = None  # (章号, 树深, 前置区, 阿拉伯章号)
     last_chap = -1
@@ -2247,16 +3005,20 @@ def _restyle_all(master: Document, chapters: list, scheme: str) -> None:
             pass
         ppr = p._p.get_or_add_pPr()
         for old_lvl in ppr.findall(qn("w:outlineLvl")):
-            ppr.remove(old_lvl)
-        lvl = OxmlElement("w:outlineLvl")
-        lvl.set(qn("w:val"), "8")
-        ppr.append(lvl)
-        if in_front or scheme == "none" or target > 4 or (depth < 2 and scheme == "gov") \
-                or SELF_NUMBERED.match(p.text):
+            ppr.remove(old_lvl)  # copy-from 带入的直写层级一并清掉，统一继承样式
+        if flat_outline:
+            lvl = OxmlElement("w:outlineLvl")
+            lvl.set(qn("w:val"), "8")  # 0 基：第 9 级=正文级，不进导航窗格/TOC 域
+            ppr.append(lvl)
+        if in_front or scheme == "none" or target > 4 or SELF_NUMBERED.match(p.text):
             continue
         sub_counters[target] = sub_counters.get(target, 0) + 1
         for k in [k for k in sub_counters if k > target]:
             sub_counters[k] = 0
+        if scheme == "gov":
+            # gov 小标题按公文层级续编（第 depth 层章下的标题取 gov 第 target 层形态）
+            _rewrite_para_text(p, f"{_gov_label(target, sub_counters)}{p.text}")
+            continue
         sub = ".".join(str(sub_counters[k]) for k in range(depth + 1, target + 1))
         prefix = arab if (depth == 1 and scheme == "chapter" and arab) else num.strip()
         _rewrite_para_text(p, f"{prefix}.{sub} {p.text}" if sub else f"{prefix} {p.text}")
@@ -2433,7 +3195,11 @@ def _measure_heading_pages(pdf_path: Path, labels: list[str],
     pages_lines: list[list[str]] = []
     has_leader: list[bool] = []
     for i in range(len(pdf)):
-        txt = pdf[i].get_textpage().get_text_range() or ""
+        tp = pdf[i].get_textpage()
+        # get_text_range 缺省参数会被 pypdfium2 重定向并打 UserWarning（stderr 噪声）；
+        # 新版显式走 get_text_bounded，旧版没有该方法再回落
+        txt = (tp.get_text_bounded() if hasattr(tp, "get_text_bounded") else tp.get_text_range()) or ""
+        tp.close()
         lines = [l.strip() for l in txt.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
         pages_lines.append([_norm_label(l) for l in lines])
         has_leader.append(any(_DOT_LEADER.search(l) for l in lines))
@@ -2539,6 +3305,68 @@ def _write_toc_numbers(docx_path: Path, mapping: dict[str, int]) -> tuple[int, i
     return written, failed
 
 
+_CHAP_REF = re.compile(r"第([0-9零一二三四五六七八九十百]+)章")
+_CN_DIGITS = "零一二三四五六七八九"
+
+
+def _zh_int(s: str) -> int | None:
+    """章号归一：第一章/第1章/第二十一章 → 1/1/21（百以内汉字 + 阿拉伯数字）。"""
+    s = s.strip()
+    if s.isdigit():
+        return int(s) if int(s) <= 9999 else None
+    if not s or any(ch not in _CN_DIGITS + "十百" for ch in s):
+        return None
+    if "百" in s:
+        h, _, rest = s.partition("百")
+        head = _zh_int(h) if h else 1
+        tail = _zh_int(rest) if rest else 0
+        return head * 100 + tail if head is not None and tail is not None else None
+    if "十" in s:
+        t, _, rest = s.partition("十")
+        head = _zh_int(t) if t else 1
+        tail = _zh_int(rest) if rest else 0
+        return head * 10 + tail if head is not None and tail is not None else None
+    return _CN_DIGITS.index(s) if len(s) == 1 else None
+
+
+def _xref_audit(docx_path: Path, mapping: dict[str, int]) -> None:
+    """表格交叉引用核对（只报事实不改文件）：表内「第X章」与目录实测章号对账。
+
+    评分索引表/业绩表引用正文章号，正文一动全要手改；章号写错或章节增删后未
+    同步，引用会指向不存在的章（真机：表写第 20 章，实际第 21 章起）。目录实测
+    映射在手，顺手对账。章号 scheme 非 chapter 时映射里无「第X章」前缀，跳过。"""
+    chapters: dict[int, str] = {}
+    for label in mapping:
+        m = _CHAP_REF.match(label)
+        if m:
+            n = _zh_int(m.group(1))
+            if n is not None:
+                chapters.setdefault(n, label)
+    if not chapters:
+        return
+    doc = Document(str(docx_path))
+    hits: set[tuple[int, str]] = set()
+    for ti, tbl in enumerate(doc.tables, 1):
+        for row in tbl.rows:
+            seen: set[int] = set()
+            for cell in row.cells:
+                if id(cell._tc) in seen:  # 合并格只算一次
+                    continue
+                seen.add(id(cell._tc))
+                for m in _CHAP_REF.finditer(cell_text_full(cell)):
+                    n = _zh_int(m.group(1))
+                    if n is None or n in chapters:
+                        continue
+                    hits.add((ti, m.group(0)))
+    for ti, ref in sorted(hits):
+        m = _CHAP_REF.match(ref)
+        ref_n = _zh_int(m.group(1)) if m else 0
+        near = min(chapters, key=lambda c: abs(c - ref_n))
+        label = chapters[near]
+        print(f"  ⚠️ 表格 T{ti} 引用「{ref}」——目录实测无此章"
+              f"（最近：{label}，页 {mapping.get(label, '?')}），请核对")
+
+
 def cmd_toc_pages(args) -> None:
     docx_path = Path(args.docx)
     if not docx_path.is_file():
@@ -2566,18 +3394,37 @@ def cmd_toc_pages(args) -> None:
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         profile = tmp / "profile"
+        # 收敛闭环：实测→回填→复测。页码回填会改目录占行，正文跟着再漂——
+        # 两轮实测一致才算收敛；轮内漂移回显条数；写后复测仍漂移即回滚报警，
+        # 不静默输出错页码（真机来回漂三次才收敛，撞 3 轮上限曾无声通过）。
         mapping_prev: dict[str, int] | None = None
-        for _ in range(3):
+        converged = False
+        rounds = 0
+        for i in range(args.max_rounds):
+            rounds = i + 1
             pdf = _lo_convert(soffice, docx_path, tmp, profile)
             mapping = _measure_heading_pages(pdf, labels, restart)
             if mapping == mapping_prev:
+                converged = True
                 break
+            if mapping_prev is not None:
+                drift = sum(1 for k in mapping if mapping_prev.get(k) != mapping[k])
+                print(f"  第 {rounds} 轮实测：{drift} 条页码仍在漂移，回填后再测")
             mapping_prev = mapping
             _, failed = _write_toc_numbers(docx_path, mapping)
             if failed:
                 _rollback(f"自检失败：{failed} 条目录条目制表位无法重写，已回滚到运行前内容")
+        if not converged and mapping_prev is not None:
+            pdf = _lo_convert(soffice, docx_path, tmp, profile)  # 末轮回填后的写后复测
+            converged = _measure_heading_pages(pdf, labels, restart) == mapping_prev
+            rounds += 1
+        if not converged:
+            _rollback(f"页码未收敛（{rounds} 轮实测仍在漂移）——已回滚到运行前内容；"
+                      f"先固定目录长度（目录条目数/版式稳定）再重跑，"
+                      f"或评估加大 --max-rounds（当前 {args.max_rounds}）")
         if mapping_prev is None:
             mapping_prev = {}
+        print(f"[目录页码] 实测收敛（{rounds} 轮）")
         # 硬门禁一：正文零改动（目录条目之外的任何段落文本都不得变）
         if _body_signature(docx_path) != body_before:
             _rollback("自检失败：本次运行改动了正文段落（非目录条目），已回滚到运行前内容")
@@ -2593,10 +3440,13 @@ def cmd_toc_pages(args) -> None:
         try:
             import pypdfium2 as pdfium
 
-            print(f"[页数] 整本共 {len(pdfium.PdfDocument(str(pdf)))} 页（{docx_path.name}）")
+            _d = pdfium.PdfDocument(str(pdf))
+            print(f"[页数] 整本共 {len(_d)} 页（{docx_path.name}）")
+            _d.close()  # 不留给解释器回收（回收时打 Cannot close 噪声）
         except Exception:
             pass
         print(f"[目录页码] 已按渲染实测写入 {len(labels) - len(not_found)}/{len(labels)} 条")
+        _xref_audit(docx_path, mapping_prev)
         if getattr(args, "map", None):
             map_path = Path(args.map)
             map_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2624,13 +3474,27 @@ def _para_no(v: str) -> int:
     try:
         n = int(s)
     except ValueError:
-        raise argparse.ArgumentTypeError(f"段落号应为数字或 P#（如 3 / P3）：{v}")
+        raise argparse.ArgumentTypeError(f"段落号须为整数：{v}")
     if n < 1:
         raise argparse.ArgumentTypeError(f"段落号从 1 起：{v}")
     return n
 
 
+def _positive_int(v: str) -> int:
+    """正整数参数（收敛轮数等——0 轮无从谈起）。"""
+    try:
+        n = int(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"须为整数：{v}")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"至少 1：{v}")
+    return n
+
+
 def main() -> None:
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(errors="replace")  # 中文 Windows 管道（GBK）下 ⚠️ 会编码崩，降级输出
     ap = argparse.ArgumentParser(description="标书正文 docx 工具族")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -2643,6 +3507,8 @@ def main() -> None:
     sp.add_argument("--landscape", action="store_true",
                     help="整节横向页（A4 横版）——宽表节（9 列以上团队/资信表）用")
     sp.add_argument("--replace", action="store_true", help="已存在时覆盖重写")
+    sp.add_argument("--drop-comments", action="store_true",
+                    help="覆盖时丢弃已有批注（缺省拦截：批注是待办凭证，不许静默丢）")
     sp.set_defaults(func=cmd_create)
 
     sp = sub.add_parser("read", help="文本视图")
@@ -2715,6 +3581,8 @@ def main() -> None:
     sp.add_argument("--pdf", default=None, help="顺带导出预览 PDF 到该路径（可选）")
     sp.add_argument("--map", default=None,
                     help="导出「标题→页码」JSON 映射（评分索引表等页码回填用）")
+    sp.add_argument("--max-rounds", type=_positive_int, default=5,
+                    help="页码收敛上限（实测→回填→复测的闭环轮数；未收敛回滚报警不静默）")
     sp.add_argument("--soffice", default=None,
                     help="LibreOffice 可执行文件路径（缺省自动探测；找不到则优雅跳过）")
     sp.set_defaults(func=cmd_toc_pages)
@@ -2725,19 +3593,46 @@ def main() -> None:
                     default="chapter",
                     help="章节编号形态：chapter=第X章/1.1；decimal=1/1.1；"
                          "gov=一、/（一）/1.；none=不编")
+    sp.add_argument("--toc-depth", type=int, choices=[1, 2, 3, 4], default=3,
+                    help="目录层级（静态条目与 TOC 域刷新口径一致，默认 3 级）")
+    sp.add_argument("--flat-outline", action="store_true",
+                    help="节内小标题摘出导航大纲（outlineLvl=9）：导航窗格降噪，代价是"
+                         "导航全扁平、F9 刷目录丢二级以下条目——默认关闭")
     sp.add_argument("--template", help="版式模板 docx（缺省用包内基准模板；用户模板的"
                                        "页面设置与页眉页脚原样保留）")
     sp.set_defaults(func=cmd_assemble)
 
+    sp = sub.add_parser("compact", help="正文段固定行距压缩（大字号/含图/目录段保护常开）")
+    sp.add_argument("--docx", required=True, help="目标 docx（整本或节文件）")
+    sp.add_argument("--line-pt", type=float, default=22.0,
+                    help="固定行距磅值（默认 22pt；exact 行距，正文页数压缩用）")
+    sp.set_defaults(func=cmd_compact)
+
+    sp = sub.add_parser("image-scan", help="导出内嵌图片缩略图网格（人工核方向，记序号）")
+    sp.add_argument("--docx", required=True, help="目标 docx")
+    sp.add_argument("--out", default=None, help="网格图输出目录（缺省 docx 同目录）")
+    sp.add_argument("--thumb", type=int, default=160, help="缩略图最大边像素（默认 160）")
+    sp.add_argument("--cols", type=int, default=6, help="每行列数（默认 6）")
+    sp.set_defaults(func=cmd_image_scan)
+
+    sp = sub.add_parser("image-rotate", help="按序号旋转图片并重算引用处 extent（序号见 image-scan）")
+    sp.add_argument("--docx", required=True, help="目标 docx")
+    sp.add_argument("--index", type=_positive_int, required=True, help="图片序号 #N（image-scan 回显）")
+    sp.add_argument("--deg", type=int, choices=[90, 180, 270], required=True, help="顺时针旋转度数")
+    sp.set_defaults(func=cmd_image_rotate)
+
     args = ap.parse_args()
     require_docx()  # --help 已在 parse_args 内退出，这里才真正需要 python-docx
-    if args.cmd in ("create", "revise", "comment", "image", "copy-from"):
-        _body_write_gate(getattr(args, "target", None) or getattr(args, "path", None))
+    if args.cmd in ("create", "revise", "comment", "image", "copy-from", "compact", "image-rotate"):
+        _body_write_gate(getattr(args, "target", None) or getattr(args, "path", None)
+                         or getattr(args, "docx", None))
     try:
         args.func(args)
     except SystemExit:
         raise
     except Exception as exc:
+        if os.environ.get("TENDER_TRACEBACK"):
+            raise  # 调试开关：带完整栈定位；缺省一行式干净（模型读回显用）
         die(f"{type(exc).__name__}: {exc}")
 
 

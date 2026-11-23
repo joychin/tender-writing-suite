@@ -11,7 +11,9 @@
   各自 `references/`（方法论 md）、`scripts/`（确定性 Python 引擎）、`templates/`
 - `listing/` — 发布工具链：`self_check.py`（结构自检）、`build_package.py`（上架单包构建器）、
   `CHANGELOG.md`（版本史）；`上架指南.md`/`商品文案.md` 为内部运营材料（gitignored）
+- `tests/` — `engine_smoke.py`（docx_toolkit 引擎回归电池，入库版；每条缺陷先写成失败用例再修）
 - `testruns/` — 测试夹具与验收电池（gitignored，含真实项目工作区样本）
+- `原型/` — 评审台页面四方向视觉原型（「方向 A 纸感公文体」已采纳实施，留存备查）
 - `out-zips/` — 打包产物（gitignored）；`docs/` — README 图片
 
 仓库源是**五目录平级开发形态**；上架产物是**单技能扁平包**（平台硬限制：Skill 仅允许两级目录，
@@ -20,8 +22,9 @@
 ## 常用命令
 
 ```bash
-python3 listing/self_check.py        # 改动技能包后必跑：frontmatter/YAML/逐技能 token 闸/跨技能引用存在性/沿革从句门/缺依赖冒烟
+python3 listing/self_check.py        # 改动技能包后必跑：frontmatter/YAML/逐技能 token 闸/跨技能引用存在性/沿革从句门/缺依赖冒烟/模板中文字体/CHANGELOG 顶行
 python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-writing-suite-<version>.zip（唯一单包）
+python3 tests/engine_smoke.py        # 引擎回归电池（E01–E26：内容保真/批注与编号/跨平台；改 docx_toolkit 前先补失败用例）
 python3 testruns/fp_smoke.py         # 评审台产物指纹链路冒烟（A1–A8）
 python3 testruns/fp_e2e_cli.py       # 评审台 CLI 级全面断言（B1–B8，含 fp_smoke 12 例复跑）
 # 脚本冒烟：八个脚本各自 `--help`（全部 argparse 化，--help 只看说明不落盘）
@@ -53,8 +56,12 @@ python3 testruns/fp_e2e_cli.py       # 评审台 CLI 级全面断言（B1–B8�
 - **语义归模型，机械归程序**：解析、表格引擎、章节编号、目录页码、对账校验、评审台页面
   全部是确定性脚本；SKILL.md 只装流程纪律，不装可脚本化的逻辑。
 - **环节间共享模块三形态解析**：脚本用 `_sibling_scripts()` 按
-  扁平(上架包) → 平级 `../<环节>` → `../stages/<环节>` 顺序找兄弟环节 `scripts/`。
-  新增跨环节引用必须走这个约定，不要写死路径。
+  扁平(上架包) → 平级 `../<环节>` → `stages/<环节>` 顺序找兄弟环节 `scripts/`。
+  新增跨环节引用必须走这个约定，不要写死路径。**这段是发货源码**：打包器不再
+  装配时替换（源码缺三形态会打包失败）——改解析逻辑只改源码一处，本地电池测到
+  的就是发货版。
+- **发版闸闸表**：self_check 新增维度时同步更新本文件与常用命令注释；沿革从句
+  对 CHANGELOG 只查顶行（历史行不追溯）。
 - **产物 HTML 统一「方向 A 纸感公文体」**（评审台/报告页/进度页三模板），评审台是唯一确认面；
   改产物页面后跑 fp 两电池验收（认 DOM 断言，不认视觉模型）。
 - **build_package.py 只改装配副本**：仓库源目录不动；md 路径前缀改写、环节 SKILL.md 转

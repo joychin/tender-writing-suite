@@ -28,17 +28,24 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-# 环节间共享模块解析（双形态）：先按五技能平级找 ../<环节>，再按上架单包找
-# ../stages/<环节>（环节收在 stages/ 下的单技能包），都缺才报错
-_STAGE_ROOT = Path(__file__).resolve().parent.parent
+# 环节间共享模块解析（三形态）：单技能扁平包（全部环节脚本同目录）→ 五技能
+# 平级 ../<环节> → stages/<环节> 收纳布局；都缺才报错。
+# 本段是发货源码：打包器不再装配时替换——本地电池测到的就是发货版。
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_STAGE_ROOT = _SCRIPTS_DIR.parent
+_SENTINEL = {"tender-docx": "docx_toolkit.py", "tender-writing": "check_writing.py"}
 
 
 def _sibling_scripts(name: str) -> Path:
-    for cand in (_STAGE_ROOT.parent / name, _STAGE_ROOT.parent / "stages" / name):
+    if (_SCRIPTS_DIR / _SENTINEL[name]).is_file():
+        return _SCRIPTS_DIR
+    for cand in (_STAGE_ROOT.parent / name, _STAGE_ROOT / "stages" / name):
         scripts = cand / "scripts"
         if scripts.is_dir():
             return scripts
-    raise SystemExit(f"缺少兄弟环节 {name}（平级与 stages/ 单包形态均未找到）：{_STAGE_ROOT.parent}")
+    raise SystemExit(
+        f"缺少兄弟环节 {name}（单包 / 平级 / stages 三形态均未找到）：{_STAGE_ROOT.parent}"
+    )
 
 
 for _sib in ("tender-writing", "tender-docx"):
@@ -46,7 +53,7 @@ for _sib in ("tender-writing", "tender-docx"):
 from apply_review import GUIDE_RELPATH, OUTLINE_RELPATH, PROMISE_RELPATH, _sha256, _volumes
 from check_writing import (ID_RE, _parse_annotations, _read, _registry_payload,
                            _resolve_source, _split_tables, table_rows)
-from docx_toolkit import require_docx, sanitize_name
+from docx_toolkit import para_text_full, require_docx, sanitize_name
 
 TEMPLATE = Path(__file__).parent.parent / "templates" / "review-workbench.html"
 REPORT_TEMPLATE = Path(__file__).parent.parent / "templates" / "analysis-report.html"
@@ -463,7 +470,7 @@ def _comments_scan(work: Path) -> list[dict]:
                 for ref in para._p.findall(".//" + qn("w:commentReference")):
                     cid = ref.get(qn("w:id"))
                     if cid in cmap:
-                        text = para.text.strip()
+                        text = para_text_full(para._p).strip()
                         anchors[cid] = (text[:40] + "…") if len(text) > 40 else text
             for cid, ctext in cmap.items():
                 out.append({"file": path.stem, "text": ctext, "anchor": anchors.get(cid, "")})
@@ -571,6 +578,9 @@ def render_report(payload: dict, workbench: bool = False) -> str:
 
 def main() -> None:
     import argparse
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(errors="replace")  # 中文 Windows 管道（GBK）下 ⚠️ 会编码崩，降级输出
     ap = argparse.ArgumentParser(description="生成评审台/分析报告静态页面（file:// 可开，离线导出修改包用）")
     ap.add_argument("--work", default="work", help="工作目录（默认 work）")
     ap.add_argument("--out", default="", help="输出路径（默认 <work>/review/评审台.html）")

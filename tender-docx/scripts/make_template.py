@@ -16,6 +16,9 @@ from docx_toolkit import enable_footer_pagenum, require_docx, setup_styles  # no
 
 
 def main() -> None:
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(errors="replace")  # 中文 Windows 管道（GBK）下 ⚠️ 会编码崩，降级输出
     # 带参数解析：--help 只看说明不落盘（曾无 argparse，冒烟 --help 也会重建模板，
     # 每次发版都给 git 造一份内容等价的 docx 元数据差异）
     argparse.ArgumentParser(

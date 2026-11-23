@@ -88,6 +88,77 @@ def token_count(body: str) -> tuple[int, str]:
 
 
 DEP_HINT_MARK = "pip install python-docx"
+# 模板主题语言的中文口径：python-docx 自带模板写 ja-JP，标题样式里的主题字体属性
+# 会顶掉显式「黑体」，汉字落到日文字体并逐字回退。开发机常没装日文字体、
+# 渲染时静默替换，肉眼验收看不见——只能量化检查模板本身。
+CJK_THEME_LANG = "zh-CN"
+
+
+def check_template_cjk_fonts() -> list[str]:
+    """基准模板的中文字体链路：主题语言必须中文、theme 东亚字形非空（空 a:ea 时
+    西文主题仍兜住东亚解析），且不得有主题属性顶掉显式东亚字体。"""
+    import zipfile
+
+    problems: list[str] = []
+    tpl = ROOT / "tender-docx" / "templates" / "base-template.docx"
+    if not tpl.is_file():
+        return ["tender-docx/templates/base-template.docx 缺失"]
+    try:
+        with zipfile.ZipFile(tpl) as z:
+            settings = z.read("word/settings.xml").decode("utf-8")
+            styles = z.read("word/styles.xml").decode("utf-8")
+            theme = z.read("word/theme/theme1.xml").decode("utf-8")
+    except (zipfile.BadZipFile, KeyError) as exc:
+        return [f"base-template.docx 读不出 settings/styles/theme：{exc}"]
+    lang = re.search(r'<w:themeFontLang[^/]*w:eastAsia="([^"]*)"', settings)
+    if not lang:
+        problems.append("base-template.docx: settings.xml 缺 themeFontLang/@eastAsia"
+                        "（主题东亚字体无从判定，Word 按界面语言猜）")
+    elif lang.group(1) != CJK_THEME_LANG:
+        problems.append(f"base-template.docx: 主题东亚语言是 {lang.group(1)}"
+                        f"（应为 {CJK_THEME_LANG}）——日文等分支字体顶掉中文字体，"
+                        "标题会落到 ＭＳ 明朝/ゴシック 并逐字回退；改 setup_styles 后重跑 make_template.py")
+    shadowed = []
+    for m in re.finditer(r'<w:style [^>]*w:styleId="([^"]+)"[^>]*>(.*?)</w:style>',
+                         styles, re.S):
+        sid, body = m.group(1), m.group(2)
+        rf = re.search(r"<w:rFonts[^/]*/>", body)
+        if not rf:
+            continue
+        tag = rf.group(0)
+        for theme_attr, explicit_attr in (("eastAsiaTheme", "w:eastAsia"),
+                                          ("asciiTheme", "w:ascii"),
+                                          ("hAnsiTheme", "w:hAnsi")):
+            if theme_attr + "=" in tag and explicit_attr + "=" in tag:
+                shadowed.append(f"{sid}({theme_attr})")
+                break
+    if shadowed:
+        problems.append("base-template.docx: 样式同时带主题字体属性与显式字体，"
+                        f"主题属性优先会顶掉后者——{'、'.join(shadowed[:6])}"
+                        f"{' 等共 ' + str(len(shadowed)) + ' 处' if len(shadowed) > 6 else ''}")
+    empty_ea = len(re.findall(r'<a:ea typeface="\s*"', theme))
+    if empty_ea:
+        problems.append(f"base-template.docx: theme1.xml 有 {empty_ea} 处空 a:ea——"
+                        "东亚分支留空时西文主题兜住解析，光归一 themeFontLang 压不住；"
+                        "改 setup_styles（含 _set_theme_ea）后重跑 make_template.py")
+    print(f"  模板中文字体：themeFontLang eastAsia={lang.group(1) if lang else '(缺)'}，"
+          f"主题属性顶显式字体 {len(shadowed)} 处，空 a:ea {empty_ea} 处")
+    return problems
+
+
+def check_changelog_head() -> list[str]:
+    """沿革从句闸补 CHANGELOG 维度：只查顶行（最新版本行）——AGENTS.md「版本史只
+    陈述当前版本做什么」对新增行生效；历史行的叙事词不追溯（全表会命中 8 个
+    历史版本行，属存量清理范畴）。"""
+    p = ROOT / "listing" / "CHANGELOG.md"
+    if not p.is_file():
+        return ["listing/CHANGELOG.md 缺失"]
+    first = p.read_text(encoding="utf-8").splitlines()[0]
+    m = CHANGELOG_PHRASES.search(first)
+    if m:
+        s = max(0, m.start() - 15)
+        return [f"listing/CHANGELOG.md 顶行: 沿革从句「{m.group(0)}」…{first[s:m.end() + 15]!r}"]
+    return []
 
 
 def no_dep_smoke() -> list[str]:
@@ -183,6 +254,8 @@ def main() -> None:
         detail = "、".join(f"{k}={v}" for k, v in sorted(versions.items()))
         problems.append(f"SKILL.md 版本不一致：{detail}——同步递增后再打包")
     problems += no_dep_smoke()
+    problems += check_template_cjk_fonts()
+    problems += check_changelog_head()
     if problems:
         print(f"\n[自检未通过] {len(problems)} 处：")
         for p in problems:

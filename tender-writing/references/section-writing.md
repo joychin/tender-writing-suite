@@ -19,6 +19,8 @@ python3 tender-docx/scripts/docx_toolkit.py revise   "<节.docx>" --para P3 --mo
 python3 tender-docx/scripts/docx_toolkit.py revise   "<节.docx>" --cell T1R2C3 --text "填入值"   # 表格格子填空；插行配 --mode insert_after
 python3 tender-docx/scripts/docx_toolkit.py comment  "<节.docx>" --para P5 --text "待办：…"   # 表格格子用 --cell T1R2C3
 python3 tender-docx/scripts/docx_toolkit.py image    "<节.docx>" --img <图片文件> [--after-para P2] [--caption "图3-1 ××说明"]
+python3 tender-docx/scripts/docx_toolkit.py image-scan   --docx "<节.docx>"   # 贴图后核方向：缩略图网格人眼扫一遍，错向记序号
+python3 tender-docx/scripts/docx_toolkit.py image-rotate --docx "<节.docx>" --index 2 --deg 90   # 按序号旋转（extent 自动按新比例重算）
 python3 tender-docx/scripts/docx_toolkit.py render-page <扫描件.pdf> 3 -o page3.png   # PDF 页转图（证书扫描件贴图用；多页 --pages 3-7）
 python3 tender-docx/scripts/docx_toolkit.py diagram gantt.png --kind gantt --spec gantt.json   # 甘特/分层真图，spec 字段见 --help
 ```

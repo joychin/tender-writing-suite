@@ -316,6 +316,9 @@ def do_stop(work: Path) -> int:
 
 
 def main() -> None:
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(errors="replace")  # 中文 Windows 管道（GBK）下 ⚠️ 会编码崩，降级输出
     ap = argparse.ArgumentParser(description="评审台本地服务（环回直写 work/ 产物）")
     ap.add_argument("--work", default="work", help="工作目录（默认 work）")
     ap.add_argument("--idle-timeout", type=int, default=7200, help="空闲自动退出秒数（默认 7200，0=不超时）")
