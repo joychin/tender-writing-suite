@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""engine_smoke.py — docx_toolkit 引擎回归电池（合成夹具，运行时生成，不含真实项目数据）。
+r"""engine_smoke.py — docx_toolkit 引擎回归电池（合成夹具，运行时生成，不含真实项目数据）。
 
 每条用例对应一个已坐实过的缺陷，走真实命令行（同模型使用方式）。发版前与 fp 两电池
 一起跑；新增引擎行为先在这里写成失败用例再改代码。
@@ -29,6 +29,14 @@ E27 合册终稿 run 级字体固化            E28 outlineLvl=8 默认摘除（
 E29 toc-pages 收敛闭环与 --max-rounds  E30 --toc-depth 多级目录 + TOC 独立样式 + 摘 \h
 E31 compact 双保护（大字号/含图不压）   E32 image-scan 网格 + image-rotate 重算 extent
 E33 偏离表完整性提示（空响应/REQ 对账） E34 表格交叉引用「第X章」核对
+
+第 5 批 Windows 兼容（全量复查）
+E35 soffice 认 Windows 默认安装位置    E36 LibreOffice 配置目录 URL 走 as_uri
+E37 PDF 句柄必关 + 临时目录清理不抛   E38 Word/WPS 占用锁文件不进枚举
+E39 带 BOM 的 txt/md 首行标题不丢
+
+第 6 批 格式件保真（红线）
+E40 招标格式件表格只拷不改（重排被拦 / 保真不误报 / 合册拒绝 / --allow-format-change 放行）
 """
 import io
 import json
@@ -38,8 +46,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import types
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from docx import Document
 from docx.oxml import OxmlElement
@@ -492,10 +503,8 @@ def e23():
 
 def e24():
     """C2：toc-pages 的 stderr 必须干净（pypdfium2 的弃用告警与对象回收噪声曾污染输出）。"""
-    import shutil as _sh
-    soffice = _sh.which("soffice") or _sh.which("libreoffice") or \
-        "/Applications/LibreOffice.app/Contents/MacOS/soffice"
-    if not Path(soffice).exists():
+    soffice = _soffice_path()
+    if not soffice:
         raise NotImplementedError("本机无 LibreOffice，跳过")
     work, _ = make_work("w-toc", "# 响应文件：投标文件\n## 目录\n- 目录\n- 甲节\n", ["甲节"], with_body=True)
     code, out = tk("assemble", "--work", work, "--numbering", "chapter")
@@ -549,12 +558,8 @@ def _assemble(work, *extra):
 
 
 def _soffice_path():
-    import shutil as _sh
-    for cand in (_sh.which("soffice"), _sh.which("libreoffice"),
-                 "/Applications/LibreOffice.app/Contents/MacOS/soffice"):
-        if cand and Path(cand).exists():
-            return cand
-    return None
+    """与发货版同一套探测（含 Windows 默认安装位置）——装了 LibreOffice 的开发机不该误记失败。"""
+    return _load("tender-docx/scripts/docx_toolkit.py")._find_soffice()
 
 
 def e27():
@@ -753,6 +758,330 @@ def e34():
           f"exit={r.returncode} out={r.stdout[:200]}")
 
 
+# ---------------------------------------------------------------- 第 5 批 Windows 兼容
+
+def _load(rel: str):
+    """按路径载入环节脚本当模块用（走真实函数，不打命令行；同名的只载一次）。"""
+    import importlib.util
+    name = Path(rel).stem
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, ROOT / rel)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules[name]
+
+
+def e35():
+    """Windows 默认安装的 LibreOffice 不进 PATH：两个脚本都得认 Program Files 约定位置，
+    且优先 soffice.com（控制台版：转换完才返回、报错有输出可回显）。"""
+    program = WORK / "e35" / "Program Files"
+    (program / "LibreOffice" / "program").mkdir(parents=True)
+    for exe in ("soffice.exe", "soffice.com"):
+        (program / "LibreOffice" / "program" / exe).write_bytes(b"")
+    want = str(program / "LibreOffice" / "program" / "soffice.com")
+    env = {"ProgramFiles": str(program), "ProgramFiles(x86)": "", "ProgramW6432": "", "LOCALAPPDATA": ""}
+    with mock.patch.dict(os.environ, env), mock.patch("shutil.which", return_value=None):
+        got_tk = _load("tender-docx/scripts/docx_toolkit.py")._find_soffice()
+        got_pd = _load("tender-analysis/scripts/parse_document.py")._find_soffice()
+    check("E35a docx_toolkit 认 Program Files 下的 LibreOffice（优先 soffice.com）",
+          got_tk == want, f"got={got_tk}")
+    check("E35b parse_document 认同一位置", got_pd == want, f"got={got_pd}")
+
+
+def e36():
+    """LibreOffice 隔离配置目录的 file URL 须由 Path.as_uri() 生成：手工拼 file://+路径 在
+    Windows 上是坏地址（盘符冒号、反斜杠），任何平台上路径含空格/# 都不转义。转换输出须
+    宽松解码（text=True 缺省严格，输出含本机代码页外的字节就抛 UnicodeDecodeError）。"""
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append((list(cmd), kw))
+        fmt = cmd[cmd.index("--convert-to") + 1]
+        outdir = Path(cmd[cmd.index("--outdir") + 1])
+        (outdir / (Path(cmd[-1]).stem + "." + fmt)).write_bytes(b"%PDF-1.4\n%%EOF\n")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    base = WORK / "e36 空格 #目录"
+    (base / "out").mkdir(parents=True)
+    docx = base / "整本-测试.docx"
+    docx.write_bytes(b"PK")
+    src_doc = base / "out" / "招标文件.doc"
+    src_doc.write_bytes(b"\xd0\xcf\x11\xe0")
+    tk = _load("tender-docx/scripts/docx_toolkit.py")
+    pd = _load("tender-analysis/scripts/parse_document.py")
+    with mock.patch("subprocess.run", side_effect=fake_run), \
+            mock.patch.object(pd, "_find_soffice", return_value="/opt/soffice"):
+        tk._lo_convert("/opt/soffice", docx, base, base / "profile")
+        pd._doc_to_docx(src_doc, base / "out")
+    cmd_tk, kw_tk = seen[0]
+    url_tk = cmd_tk[2].split("=", 1)[1]
+    url_pd = next(a for a in seen[1][0] if a.startswith("-env:UserInstallation=")).split("=", 1)[1]
+    check("E36a toc-pages 配置目录 URL 合法（as_uri）",
+          url_tk == (base / "profile").resolve().as_uri() and " " not in url_tk and "#" not in url_tk,
+          f"url={url_tk}")
+    check("E36b .doc 转换配置目录 URL 合法（as_uri）",
+          url_pd == (base / "out" / ".lo-profile").resolve().as_uri() and " " not in url_pd,
+          f"url={url_pd}")
+    check("E36c 转换输出宽松解码", kw_tk.get("errors") == "replace", f"kw={kw_tk}")
+    check("E36d .doc 转换产物落 _converted.docx 且中间件清掉",
+          (base / "out" / "_converted.docx").is_file() and not (base / "out" / "招标文件.docx").exists())
+
+
+def e37():
+    """Windows 下未关的文件句柄会让临时目录清理抛 PermissionError（WinError 32），盖掉真正的
+    报错：页码测量在异常路径也必须关 PDF；临时目录清理失败只留目录不抛。"""
+    state = {}
+
+    class Doc:
+        def __init__(self, *_a, **_k):
+            state["doc"] = self
+            self.closed = False
+
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, _i):
+            tp = types.SimpleNamespace(close=lambda: None, get_text_range=lambda: "正文")
+            return types.SimpleNamespace(get_textpage=lambda: tp)
+
+        def close(self):
+            self.closed = True
+
+    tk = _load("tender-docx/scripts/docx_toolkit.py")
+    fake = types.SimpleNamespace(PdfDocument=Doc)
+    with mock.patch.dict(sys.modules, {"pypdfium2": fake}), \
+            mock.patch.object(tk, "_page_has_heading", side_effect=RuntimeError("测量出错")):
+        raised = ""
+        try:
+            tk._measure_heading_pages(WORK / "x.pdf", ["甲章"])
+        except RuntimeError as exc:
+            raised = str(exc)
+    closed = bool(state.get("doc") and state["doc"].closed)
+    check("E37a 页码测量抛错时 PDF 句柄已关", raised == "测量出错" and closed,
+          f"raised={raised!r} closed={closed}")
+    td = tk._tempdir()
+    try:
+        check("E37b 临时目录清理失败不抛（ignore_cleanup_errors）",
+              getattr(td, "_ignore_cleanup_errors", False) is True and Path(td.name).is_dir())
+    finally:
+        td.cleanup()
+
+
+def e38():
+    """Word/WPS 打开节文件时在同目录落占用锁文件（~$节.docx / .~节.docx，隐藏）：按 *.docx
+    枚举 body/ 的三处都得跳过——合册孤儿扫描误报「目录外文件」、build_dispatch 同级摘要被
+    抢走名额、check_writing 全局校验直接 PackageNotFoundError 崩溃（收尾必跑）。"""
+    work, _ = make_work("w-lock",
+                        "# 响应文件：投标文件\n## 目录\n- 目录\n- 甲章\n- 乙章\n- 丙章\n",
+                        ["甲章", "乙章", "丙章"])
+    for name in ("~$甲章.docx", ".~乙章.docx"):
+        p = work / "body" / name
+        p.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")  # Office 锁文件：非 zip 的小文件
+        os.utime(p, (time.time() + 5, time.time() + 5))  # 锁文件最新（打开时才建）
+    code, out = tk("assemble", "--work", work)
+    check("E38a 合册孤儿扫描不点名占用锁文件",
+          code == 0 and "目录外文件" not in out and "合并 4 节" in out, f"exit={code} out={out[:300]}")
+    code, out = cw("--work", work)
+    check("E38b 全局校验遇锁文件不崩",
+          "PackageNotFound" not in out and "Traceback" not in out, f"exit={code} out={out[:300]}")
+    got = _load("tender-writing/scripts/build_dispatch.py")._sibling_summaries(work, "", set())
+    check("E38c 同级摘要跳过锁文件", len(got) == 3 and not any("~$" in s or ".~" in s for s in got),
+          f"got={got}")
+
+
+def e39():
+    """Windows 记事本/PowerShell 5.1 另存的 UTF-8 带 BOM：首行标题不能丢、产物首行不带 BOM 字符。"""
+    src = WORK / "e39-bom.md"
+    src.write_bytes("\ufeff# 第一章 总则\n\n正文。\n".encode("utf-8"))
+    pd = _load("tender-analysis/scripts/parse_document.py")
+    L = pd.Lines()
+    pd.parse_passthrough(src, L)
+    check("E39a 带 BOM 的 md 首行标题被识别", [h[1] for h in L.headings] == ["第一章 总则"],
+          f"headings={L.headings}")
+    check("E39b 产物首行不带 BOM 字符", L.lines[0] == "# 第一章 总则", f"first={L.lines[0]!r}")
+
+
+# ---------------------------------------------------------------- 第 6 批：格式件保真（红线）
+
+
+def _fmt_work(name: str) -> tuple[Path, Path]:
+    """搭「招标原件 → 真实解析 → 登记 → 指引 → 节文件」最小工作区，返回 (work, 招标原件)。
+
+    原件三张表：四网格列合并格格式表（L7-L10）、三列评分索引表（L16-L19）、一格方框
+    （L23）。四个叶子里评分索引表走 copy-from 拷原件（正路）；其他资信资料用 table 块
+    重排成两列键值表，且指引依据列漏记 TPL——只有目录「来源标注」挂着（真机事故形态）；
+    封面区间无表；授权委托书把方框换成了段落。"""
+    base = WORK / name
+    work = base / "work"
+    for d in ("outline", "analysis", "body", "review"):
+        (work / d).mkdir(parents=True)
+    (work / "review" / "评审台.html").write_text("<html></html>", encoding="utf-8")
+    (work / "review" / ".progress-opened").write_text("", encoding="utf-8")
+    tender = base / "招标文件.docx"
+    d = Document()
+    d.add_paragraph("第七章 响应文件格式")
+    d.add_paragraph("五、其他资信资料")
+    d.add_paragraph("其他资信资料")
+    t = d.add_table(rows=3, cols=4)
+    t.cell(0, 0).text = "单位名称"
+    t.cell(0, 2).text = "电话"
+    t.cell(0, 2).merge(t.cell(0, 3))
+    t.cell(1, 0).text = "单位概况"
+    t.cell(1, 0).merge(t.cell(2, 0))
+    t.cell(1, 1).text = "统一社会信用代码"
+    t.cell(1, 2).merge(t.cell(1, 3))
+    t.cell(2, 1).text = "职工总数"
+    t.cell(2, 2).text = "共 人"
+    t.cell(2, 2).merge(t.cell(2, 3))
+    d.add_paragraph("填写说明：资格审查资料中已提供的无需重复提供。")
+    d.add_paragraph("评分索引表")
+    t2 = d.add_table(rows=3, cols=3)
+    for i, s in enumerate(("序号", "评分因素", "页码")):
+        t2.cell(0, i).text = s
+    t2.cell(1, 0).text = "一、履约能力"
+    t2.cell(1, 0).merge(t2.cell(1, 2))
+    t2.cell(2, 0).text = "1"
+    d.add_paragraph("法定代表人授权委托书")
+    t3 = d.add_table(rows=1, cols=1)
+    t3.cell(0, 0).text = "授权代表身份证复印件"
+    d.save(str(tender))
+    r = subprocess.run([sys.executable, "-B", str(ROOT / "tender-analysis" / "scripts" / "parse_document.py"),
+                        str(tender), "-o", str(work / "parse")], capture_output=True, text=True, errors="replace")
+    assert r.returncode == 0, r.stdout + r.stderr
+    (work / "parse" / "sources.json").write_text(
+        json.dumps({"main": tender.name, "supplements": [], "excluded": []}), encoding="utf-8")
+    (work / "analysis" / "requirements-format.md").write_text(
+        "> 来源文件：`招标文件.docx`。下表「同文件」即指该文件。\n\n"
+        "## 三、招标方给出的章节示例 / 模板（templates）\n\n"
+        "| 序号 | 模板名称 | 归属(bidPart) | 对应必须章节 | 原文出处线索 |\n"
+        "|---|---|---|---|---|\n"
+        "| TPL-01 | 其他资信资料（单位概况表） | technical | 3 | 同文件 五（L3-L12） |\n"
+        "| TPL-02 | 评分索引表 | technical | 1 | 同文件（L14-L19） |\n"
+        "| TPL-03 | 封面样例 | technical | 0 | 同文件（L1-L1） |\n"
+        "| TPL-04 | 授权委托书 | technical | 2 | 同文件（L21-L23） |\n",
+        encoding="utf-8")
+    (work / "outline" / "tender-response-docs.md").write_text(
+        "# 响应文件：投标文件\n\n## 目录\n- 封面\n- 目录\n- 评分索引表\n- 其他资信资料\n- 授权委托书\n\n"
+        "## 来源标注\n- 封面 :: TPL-03\n- 评分索引表 :: TPL-02\n- 其他资信资料 :: MAND-01, TPL-01\n"
+        "- 授权委托书 :: TPL-04\n\n"
+        "## 目录说明\n- 封面 :: 交付形态=模板或附件填充 | 归位理由=样例 | 理由来源=TPL-03 | 概述=封面\n"
+        "- 评分索引表 :: 交付形态=模板或附件填充 | 归位理由=格式件 | 理由来源=TPL-02 | 概述=评分索引\n"
+        "- 其他资信资料 :: 交付形态=模板或附件填充 | 归位理由=格式件 | 理由来源=MAND-01 | 概述=单位概况表\n"
+        "- 授权委托书 :: 交付形态=模板或附件填充 | 归位理由=格式件 | 理由来源=TPL-04 | 概述=授权书\n",
+        encoding="utf-8")
+    (work / "body" / "写作指引.md").write_text(
+        "| 节 | 模式 | 依据 | 素材 | 图示 | 缺口/备注 |\n|---|---|---|---|---|---|\n"
+        "| 封面 | — | TPL-03 | — | — | 格式件：按封面样例排版 |\n"
+        "| 目录 | — | — | — | — | 目录页：合册机械生成，不建节 |\n"
+        "| 评分索引表 | 格式跟随 | TPL-02 | 招标文件.docx L16-L19 | — | — |\n"
+        "| 其他资信资料 | 格式跟随 | MAND-01 | — | — | 招标原表为四列合并单元格，填入后版面失衡，"
+        "改为两列项目/内容表逐项填报 |\n"
+        "| 授权委托书 | 格式跟随 | TPL-04 | — | — | — |\n",
+        encoding="utf-8")
+    body_dir = work / "body"
+    code, out = tk("create", body_dir / "封面.docx", "--title", "封面", "--body",
+                   body("b-fmt-cover", [{"text": "科学数据标注服务项目", "style": "cover-title"}]))
+    assert code == 0, out
+    sec_b = body_dir / "评分索引表.docx"
+    code, out = tk("create", sec_b, "--title", "评分索引表", "--body",
+                   body("b-fmt-index", [{"text": "本表按评审细则逐项标注响应位置。"},
+                                        {"type": "table", "header": ["备注项", "说明"],
+                                         "rows": [["修订记录", "无"]]}]))
+    assert code == 0, out
+    code, out = tk("copy-from", tender, sec_b, "--lines", "L16-L19",
+                   "--parse", work / "parse" / tender.name)
+    assert code == 0, out
+    # 拷入的表是 T2：往空行填页码、再插一行（格式件只填不改的正路）
+    code, out = tk("revise", sec_b, "--cell", "T2R3C3", "--text", "12")
+    assert code == 0, out
+    code, out = tk("revise", sec_b, "--cell", "T2R3C1", "--mode", "insert_after")
+    assert code == 0, out
+    code, out = tk("create", body_dir / "其他资信资料.docx", "--title", "其他资信资料", "--body",
+                   body("b-fmt-rebuilt", [{"text": "本表按采购文件要求逐项填报。"},
+                                          {"type": "table", "caption": "其他资信资料",
+                                           "header": ["项目", "内容"],
+                                           "rows": [["单位名称", "某某科技有限公司"],
+                                                    ["统一社会信用代码", "91440300000000000X"],
+                                                    ["职工总数", "共 12 人"]]}]))
+    assert code == 0, out
+    code, out = tk("create", body_dir / "授权委托书.docx", "--title", "授权委托书", "--body",
+                   body("b-fmt-auth", [{"text": "附："}, {"text": "授权代表身份证复印件："}]))
+    assert code == 0, out
+    return work, tender
+
+
+def e40():
+    """红线：招标格式件表格只拷不改——节内表格与原件格式表对不上，单节自查、全局校验、
+    合册三道都拦；用户明确同意的节按参数放行；核对自身出错只告警。"""
+    work, tender = _fmt_work("w-fmt")
+    sec_a = work / "body" / "其他资信资料.docx"
+    sec_b = work / "body" / "评分索引表.docx"
+    code, out = cw("--work", work, "--section", sec_a)
+    check("E40a 重排的格式表被单节自查拦下（原件 4 列、节内 2 列，点名丢失标签）",
+          code == 1 and "招标格式件" in out and "4 列" in out and "2 列" in out and "单位概况" in out,
+          f"exit={code} out={out[:300]}")
+    code, out = cw("--work", work, "--section", sec_b)
+    check("E40b 拷原件填空+插行+另有自建表的节通过", code == 0 and "[校验通过]" in out,
+          f"exit={code} out={out[:300]}")
+    code, out = cw("--work", work)
+    check("E40c 全局校验点名两处被改的格式件（重排、方框被换成段落）并给红线指令",
+          code == 1 and "其他资信资料.docx" in out and "授权委托书.docx" in out
+          and "没有表格" in out and "[红线指令]" in out and "[G6 指令]" not in out,
+          f"exit={code} out={out[:400]}")
+    check("E40d 保真的节与区间无表的节不被误报",
+          "评分索引表.docx" not in out and "封面.docx" not in out, out[:400])
+    code, out = cw("--work", work, "--allow-format-change", "其他资信资料，授权委托书")
+    check("E40e 用户同意的节按参数放行后校验通过", code == 0 and "[校验通过]" in out and "[G6 指令]" in out,
+          f"exit={code} out={out[:300]}")
+    code, out = cw("--work", work, "--guide")
+    check("E40f 指引备注里的结构变更措辞被提示",
+          "格式件结构变更" in out and "其他资信资料" in out, f"exit={code} out={out[:300]}")
+    code, out = tk("assemble", "--work", work)
+    check("E40g 合册拒绝带被改格式件的稿子（退出码 2、不产整本）",
+          code == 2 and "[合册被拦]" in out and "其他资信资料.docx" in out
+          and not list((work / "body").glob("整本-*.docx")), f"exit={code} out={out[:300]}")
+    code, out = tk("assemble", "--work", work, "--allow-format-change", "其他资信资料,授权委托书")
+    check("E40h 用户同意后合册放行", code == 0 and list((work / "body").glob("整本-*.docx")),
+          f"exit={code} out={out[:300]}")
+    # 核对自身出错：校验只告警、合册照常——保真核对是防线，不许反过来变成交付故障点
+    cw_mod = _load("tender-writing/scripts/check_writing.py")
+    cw_mod._load_docx()
+    with mock.patch.object(cw_mod, "format_fidelity", side_effect=RuntimeError("核对出错")):
+        issues, warnings = cw_mod.check_global(work, [])
+    check("E40i 保真核对出错时全局校验只告警",
+          not issues and any("格式件保真核对未能执行" in w for w in warnings), f"{issues} {warnings}")
+    tk_mod = _load("tender-docx/scripts/docx_toolkit.py")
+    tk_mod.require_docx()
+    args = types.SimpleNamespace(work=str(work), numbering="chapter", toc_depth=3, flat_outline=False,
+                                 template=None, allow_format_change="")
+    with mock.patch.object(tk_mod, "format_fidelity", side_effect=RuntimeError("核对出错")):
+        tk_mod.cmd_assemble(args)
+    check("E40j 保真核对出错时合册照常完成", list((work / "body").glob("整本-*.docx")))
+    # 解析产物不在时无从比对：跳过不拦、不崩
+    shutil.move(str(work / "parse" / tender.name), str(work / "parse" / "gone"))
+    code, out = cw("--work", work, "--section", sec_a)
+    check("E40k 解析产物缺失时跳过核对", code == 0, f"exit={code} out={out[:200]}")
+    # 真机工作区两种登记形态都得认：首列写纯序号（编号=行序）、出处写「同文件」而
+    # 来源确认单与登记表头部声明都没有（退到唯一的那份解析产物）——漏一种整份核对就静默失效
+    shutil.move(str(work / "parse" / "gone"), str(work / "parse" / tender.name))
+    tk_mod, cw_mod = _load("tender-docx/scripts/docx_toolkit.py"), _load("tender-writing/scripts/check_writing.py")
+    mine = {k: v["ranges"][0][0] for k, v in tk_mod.ff_tpl_registry(work).items()}
+    theirs, _s = cw_mod._registry_payload(work)
+    theirs = {k: v["line"] for k, v in theirs.items() if k.startswith("TPL-")}
+    check("E40l 模板登记读取与 check_writing 同口径（编号按行序、起始行一致）",
+          mine == theirs == {"TPL-01": 3, "TPL-02": 14, "TPL-03": 1, "TPL-04": 21}, f"{mine} vs {theirs}")
+    (work / "parse" / "sources.json").unlink()
+    ana = work / "analysis" / "requirements-format.md"
+    text = ana.read_text(encoding="utf-8").split("\n", 1)[1]
+    for n in range(1, 5):
+        text = text.replace(f"| TPL-0{n} |", f"| {n} |")
+    ana.write_text(text, encoding="utf-8")
+    code, out = cw("--work", work, "--section", sec_a)
+    check("E40m 首列纯序号 + 「同文件」+ 无来源确认单时仍核对得到",
+          code == 1 and "招标格式件" in out, f"exit={code} out={out[:300]}")
+
+
 if __name__ == "__main__":
     for name, fn in (("E01", e01), ("E02", e02), ("E03", e03), ("E04", e04), ("E05", e05), ("E06", e06),
                      ("E07", e07), ("E08", e08), ("E09", e09), ("E10", e10), ("E11", e11), ("E12", e12),
@@ -760,7 +1089,9 @@ if __name__ == "__main__":
                      ("E19", e19), ("E20", e20), ("E21", e21), ("E22", e22), ("E23", e23),
                      ("E24", e24), ("E25", e25), ("E26", e26),
                      ("E27", e27), ("E28", e28), ("E29", e29), ("E30", e30), ("E31", e31),
-                     ("E32", e32), ("E33", e33), ("E34", e34)):
+                     ("E32", e32), ("E33", e33), ("E34", e34),
+                     ("E35", e35), ("E36", e36), ("E37", e37), ("E38", e38), ("E39", e39),
+                     ("E40", e40)):
         run(name, fn)
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     for f_ in FAIL:

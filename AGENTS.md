@@ -8,14 +8,15 @@
 
 ## 目录结构
 
-- `tender-writing-suite/` — 入口技能（总控）：红线 7 条、确认门、技能路由、跨技能路径约定
+- `tender-writing-suite/` — 入口技能（总控）：红线 8 条、确认门、技能路由、跨技能路径约定
 - `tender-analysis/` `tender-writing/` `tender-review/` `tender-docx/` — 四个环节技能，平级安装；
   各自 `references/`（方法论 md）、`scripts/`（确定性 Python 引擎）、`templates/`
 - `listing/` — 发布工具链：`self_check.py`（结构自检）、`build_package.py`（上架单包构建器）、
   `CHANGELOG.md`（版本史）；`上架指南.md`/`上架指引.docx`/`商品文案.md`/`提审说明.md` 为
   内部运营材料（gitignored，不随开源仓库分发）
 - `tests/` — `engine_smoke.py`（docx_toolkit 引擎回归电池，入库版，合成夹具运行时生成；
-  每条缺陷先写成失败用例再修）
+  每条缺陷先写成失败用例再修）、`review_smoke.py`（评审台服务生命周期电池 R01–R09，
+  跨平台零第三方依赖，守 Windows 探活/关停语义）
 - `testruns/` — 测试夹具与验收电池（gitignored，含真实项目工作区样本）；`fp_smoke.py`/
   `fp_e2e_cli.py` 两电池及其夹具 `qszbh260186/work` 只存在于本机，新克隆的仓库跑不了
 - `原型/` — 评审台页面四方向视觉原型（「方向 A 纸感公文体」已采纳实施，留存备查）
@@ -30,8 +31,11 @@
 python3 listing/self_check.py        # 改动技能包后必跑：frontmatter 必填与规格/YAML/逐技能 token 闸/空目录/
                                      #   同技能与跨技能引用存在性/产品专属词/沿革从句/五包版本一致/
                                      #   缺依赖冒烟/模板中文字体/CHANGELOG 顶行
-python3 tests/engine_smoke.py        # 引擎回归电池 E01–E34（内容保真/批注与编号/跨平台与发版闸/真机复盘）；
+python3 tests/engine_smoke.py        # 引擎回归电池 E01–E40（内容保真/批注与编号/跨平台与发版闸/真机复盘/Windows 兼容/
+                                     #   格式件保真红线）；
                                      #   改 docx_toolkit 前先补失败用例；E24/E29/E34 靠 LibreOffice，缺了记失败不跳过
+python3 tests/review_smoke.py        # 评审台服务生命周期电池 R01–R09（零第三方依赖，跨平台）；
+                                     #   动 serve_review 的探活/关停前先补失败用例
 python3 tender-docx/scripts/make_template.py   # 改 docx_toolkit 的 setup_styles 后重生成 base-template.docx
 python3 testruns/fp_smoke.py         # 评审台产物指纹链路冒烟（A1–A8；本机专属，见 testruns 一条）
 python3 testruns/fp_e2e_cli.py       # 评审台 CLI 级全面断言（B1–B8，含 fp_smoke 12 例复跑；本机专属）
@@ -69,6 +73,14 @@ python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-wri
 - **语义归模型，机械归程序**：解析、表格引擎、章节编号、目录页码、对账校验、评审台页面
   全部是确定性脚本；SKILL.md 只装流程纪律，不装可脚本化的逻辑。增补纪律（节奏/停轮/门类
   规则）前先问能否做成产物前置检查或脚本闸——能就做机制，不能才写进 SKILL.md，且只写在门粒度。
+- **招标格式件只拷不改是红线**（入口红线 8；用户 2026-11-24 拍板：擅自改模板=废标级，
+  版面难看不加调宽工具、加批注请用户手动处理）。机制是 `docx_toolkit.format_fidelity`：
+  按目录「来源标注」的 TPL 编号回分析登记表取出处区间（编号=模板表行序，与
+  `_registry_payload` 同口径；「同文件」依次退到登记表头部声明、sources.json 主文件、
+  唯一的那份解析产物），在解析 md 里找原件表，与节内表格比网格列数、标签保留、整表
+  存在；`check_writing --section`／全局校验与 `assemble` 三道共用，`--allow-format-change`
+  只在用户对话明确同意后使用。**触发只认目录「来源标注」**——指引依据列是模型写的，
+  错挂 TPL 会把无关的节拖进来误报。动它之前先看 `tests/engine_smoke.py`（E40）。
 - **环节间共享模块三形态解析**：脚本用 `_sibling_scripts()` 按
   扁平(上架包) → 平级 `../<环节>` → `stages/<环节>` 顺序找兄弟环节 `scripts/`
   （现由 `build_dispatch`/`check_writing`/`build_review`/`apply_review` 四脚本使用）。
@@ -96,7 +108,30 @@ python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-wri
   （`paragraph.text` 漏超链接与修订插入里的文字）；清格重写走 `_rewrite_cell_text()`
   （`cell.text = ""` 连批注锚一起抹）；`base-template.docx` 是 `make_template.py` 从
   `setup_styles` 生成的，改样式定义后必须重跑。中文字体跑偏在没装日文字体的开发机上渲染
-  会静默回退，肉眼验收看不见，只认 self_check 的模板字体闸。
+  会静默回退，肉眼验收看不见，只认 self_check 的模板字体闸。LibreOffice 查找有两份同口径的
+  `_find_soffice`（本文件与 `parse_document.py`，环节技能各自独立安装故不共享模块），
+  改一处同步另一处（E35 对两份断言同一结果）。
+- **serve_review 的进程探活必须跨平台**：Windows 下 `os.kill(pid, 0)` 不是探活——信号 0
+  就是 `CTRL_C_EVENT`，走 `GenerateConsoleCtrlEvent`：目标不是进程组组长就抛 WinError 87
+  （`OSError`，2.2.0 真机 `--status` 的 traceback 即此），是组长（宿主以新进程组起后台
+  任务时）就等于给服务发 Ctrl+C。`_pid_alive` 在 Windows 走 `OpenProcess` 只读查询，任何
+  探测异常按「不存活」处理；`--stop` 在 Windows 是强制结束（没有 SIGTERM 投递），`SIGKILL`
+  用 `getattr` 兜底（Windows 无此信号）。**结束进程前先验身份**：记录的 pid 必须在
+  serve.json 记的地址上应答 healthz 才结束——进程号会被别的程序复用（Windows 回收很快），
+  对复用者发结束信号就是误杀。环回探活用不带代理的 opener（`urlopen` 缺省读系统代理，
+  豁免名单没含 127.0.0.1 时活着的服务会被判「未运行」）。动它之前先看
+  `tests/review_smoke.py`（R01–R09）。
+- **脚本回显是给模型读的**：docx_toolkit 缺省一行式报错（`TENDER_TRACEBACK=1` 才出完整栈）；
+  八个脚本起手都对 stdout/stderr `reconfigure(errors="replace")`（中文 Windows 的 GBK
+  管道下遇 emoji 会崩），新增脚本照做。
+- **Windows 兼容清单**（开发机是 macOS，这些差异本地跑不出来；真机是 workbuddy on
+  Windows——bash 风格 shell、宿主自带后台运行、模型用 `python` 起脚本。新增子进程、
+  临时目录、外部文件读取、`body/` 枚举时逐条对照；对应用例靠 mock 在 macOS 上复现）：
+  外部程序不假设在 PATH 里（LibreOffice 安装器不写 PATH，查约定安装位置与注册表）；
+  文件地址用 `Path.as_uri()` 生成（手工拼 `file://`+路径 在 Windows 是坏地址）；子进程
+  输出解码带 `errors="replace"`；临时目录里的句柄用完即关，清理失败不得盖掉真正的报错
+  （`docx_toolkit._tempdir()`）；枚举 `body/` 下 `*.docx` 跳过 `~$`/`.~` 占用锁文件
+  （Word/WPS 打开节文件时落的，不是 zip）；读外部文本先去 BOM；环回请求不走系统代理。
 - **脚本回显是给模型读的**：docx_toolkit 缺省一行式报错（`TENDER_TRACEBACK=1` 才出完整栈）；
   八个脚本起手都对 stdout/stderr `reconfigure(errors="replace")`（中文 Windows 的 GBK
   管道下遇 emoji 会崩），新增脚本照做。

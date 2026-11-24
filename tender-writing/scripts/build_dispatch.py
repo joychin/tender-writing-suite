@@ -223,7 +223,9 @@ def _sibling_summaries(work: Path, vol_dir: str, exclude: set[str]) -> list[str]
     from docx import Document  # 局部 import：只有真要摘要时才载入 python-docx
     cands = []
     for p in sorted(body_dir.glob("*.docx")):
-        if p.stem in exclude or p.name.startswith("整本-"):
+        # ~$节.docx / .~节.docx 是 Word/WPS 打开节文件时落的占用锁文件（隐藏，最新），
+        # 不是产物——不滤会白占「最近三节」的名额
+        if p.stem in exclude or p.name.startswith(("整本-", "~$", ".~")):
             continue
         cands.append(p)
     cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)

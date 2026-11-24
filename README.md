@@ -8,7 +8,7 @@
 **已在多份真实标书的完整编写中实战使用——每个版本都由真实项目复盘打磨而来。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](listing/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.2.3-blue.svg)](listing/CHANGELOG.md)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-informational)
 ![Offline](https://img.shields.io/badge/%E7%BD%91%E7%BB%9C-%E7%BA%AF%E6%9C%AC%E5%9C%B0%E8%BF%90%E8%A1%8C-success)
 
@@ -113,7 +113,7 @@ pip install python-docx pypdfium2 docxcompose Pillow
 四环节 `SKILL.md` 转成 `references/stage-*.md`，脚本与模板全部拍平进 `scripts/`、`templates/`。
 
 ```text
-tender-writing-suite/          # 入口：红线 7 条 / 确认门 / 技能路由 / 工作目录约定
+tender-writing-suite/          # 入口：红线 8 条 / 确认门 / 技能路由 / 工作目录约定
 ├── SKILL.md
 └── references/                # 证据边界 / 阶段门 / 回复口径
 

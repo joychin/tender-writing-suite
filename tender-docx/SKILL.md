@@ -13,7 +13,7 @@ examples_en:
   - "Assemble all sections into the final volume with TOC page numbers"
   - "Export a PDF preview after assembly"
   - "Check pending comments before delivery"
-version: 2.2.0
+version: 2.2.3
 author: 灵燕智能
 ---
 
@@ -42,6 +42,10 @@ python3 tender-docx/scripts/docx_toolkit.py toc-pages "work/body/整本-投标�
 评分索引表等机械回填。**页码口径=行业惯例**：封面/前置/目录不编页码，正文分节
 自第 1 页起编。**整本是派生产物**：编号与目录页由合册机械生成、待办批注原样
 迁移；改内容回节文件层改再合册（直接手改整本会被覆盖）；返回的警告逐条点名。
+
+**合册前先核对招标格式件**：节内表格与原件格式表对不上（列数变了、原件标签丢了、
+整张表没了）即拒绝合册——擅自改格式件是废标级红线（入口红线 8）；用户在对话里
+明确同意改结构的节，加 `--allow-format-change "<节名>"`（多个用逗号分隔）放行。
 
 `toc-pages` 是**实测→回填→复测的收敛闭环**（默认至多 5 轮，`--max-rounds` 调）：
 回填会改目录占行、正文跟着再漂，两轮实测一致才算收敛；未收敛回滚并报警，不

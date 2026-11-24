@@ -13,7 +13,7 @@ examples_en:
   - "Open the review workbench so I can edit the outline"
   - "Refresh the commitments review page"
   - "Apply my outline edits to the artifacts"
-version: 2.2.0
+version: 2.2.3
 author: 灵燕智能
 ---
 
@@ -44,12 +44,16 @@ tender-analysis（G1/G2 报告、G3 首建）与 tender-writing（G4/G5/G6 刷�
 
 ```bash
 python3 tender-review/scripts/build_review.py --work work --pages report   # 分析阶段（G1/G2）：只产分析报告
-python3 tender-review/scripts/build_review.py --work work            # G3 起全量生成（评审台+报告+写作进度）
-python3 tender-review/scripts/serve_review.py --work work            # 起服务，打印带 token 的 URL
-python3 tender-review/scripts/serve_review.py --work work --status   # 用前探活（agent 每次引用前执行）
+python3 tender-review/scripts/serve_review.py --work work            # 先起服务（打印带 token 的裸 URL）
+python3 tender-review/scripts/build_review.py --work work            # G3 起全量生成；服务已起时回显 [交付链接]（带 ?v=），复制它交付
+python3 tender-review/scripts/serve_review.py --work work --status   # 后续引用前探活（刚起服务不要立刻跑，后台启动有竞态）
 python3 tender-review/scripts/serve_review.py --work work --stop     # 收尾关停（必做）
 python3 tender-review/scripts/apply_review.py --patch 改动文件.json --work work   # 助手代为应用
 ```
+
+服务未起时 `build_review.py` 不回显交付链接，只提示「先起服务再重跑」——G3 的
+正确顺序是**先起服务、再重跑全量 build**，不是 build 完再起服务（初建那次没有
+`?v=` 链接，容易误用起台时的裸 URL）。
 
 模板即唯一视觉来源：令牌集中在 `templates/review-workbench.html` 的 `:root`，
 改视觉先改模板；服务模式 GET 实时读盘读模板，刷新即生效（静态离线版是生成时点

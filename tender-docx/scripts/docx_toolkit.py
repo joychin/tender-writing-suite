@@ -2228,6 +2228,283 @@ def cmd_diagram(args) -> None:
               f"用 image 子命令插入节文件）")
 
 
+# ---------------------------------------------------------------- 格式件保真核对（红线）
+
+# 招标文件给了格式的表只能 copy-from 拷原件、往空格里填：行列与合并格一个不动。
+# 真机事故（之江实验室项目）：12 网格列的「其他资信资料」被重排成两列键值表、
+# 「评分索引表」被改成五列，写作指引备注里一句「改为两列」就放行——措辞层的
+# 「表格/函件不会重排走样」拦不住（模型嫌填值后版面难看就自己重建表）。这里拿
+# 节内表格比对原件：网格列数一致、原件标签文字还在、整张表没丢。擅自改格式件
+# 是废标级，所以单节自查、全局校验、合册三道都跑这同一份核对。
+
+_FF_TPL_ANY_RE = re.compile(r"TPL-0*(\d{1,3})", re.I)
+_FF_RANGE_RE = re.compile(r"L\s*(\d{1,6})(?:\s*[-–~]\s*L?\s*(\d{1,6}))?")
+_FF_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_FF_HDR_SOURCE_RE = re.compile(r"^>\s*来源文件[：:]\s*`?([^`（(\n]+?)`?\s*(?:[（(。；]|$)")
+_FF_MATERIAL_RE = re.compile(r"^(.+\.docx)\s+L(\d+)(?:-L?(\d+))?$", re.I)
+_FF_MD_SEP_RE = re.compile(r"^:?-{2,}:?$")
+_FF_FIX = ("处置：删掉重排的表，用 copy-from 把招标原件对应区间拷进节文件，再 revise 只往空格里填；"
+           "版面难看不改表，加 Word 批注请用户手动处理；"
+           "用户已在对话里明确同意改结构的，加 --allow-format-change \"<节名>\" 放行。")
+
+
+def allow_format_set(raw: str) -> set[str]:
+    """--allow-format-change 的节名清单 → 归一集合（节文件名主干，中英文逗号分号都认）。"""
+    return {re.sub(r"\s+", "", x) for x in re.split(r"[,，;；]", raw or "") if x.strip()}
+
+
+def _ff_md_cells(line: str) -> list[str]:
+    s = line.strip()
+    if len(s) < 2 or not (s.startswith("|") and s.endswith("|")):
+        return []
+    return [c.strip() for c in re.split(r"(?<!\\)\|", s[1:-1])]
+
+
+def _ff_md_rows(text: str) -> list[list[str]]:
+    return [cells for cells in (_ff_md_cells(ln) for ln in text.splitlines())
+            if cells and not all(_FF_MD_SEP_RE.match(c) for c in cells if c)]
+
+
+def _ff_md_tables(lines: list[str]) -> list[dict]:
+    """解析 md 里的管道表：[{lo, hi, cols, rows, labels}]（行号 1 基，rows 含表头行）。
+    合并格在解析 md 里按网格位重复出现（「电话 | 电话」），比对前去重即标签集合。"""
+    tables: list[dict] = []
+    cur: dict | None = None
+    for i, raw in enumerate(lines, 1):
+        cells = _ff_md_cells(raw)
+        if not cells:
+            cur = None
+            continue
+        if any(cells) and all(_FF_MD_SEP_RE.match(c) for c in cells if c):
+            continue  # 表头分隔行；整行皆空的是空行数据行，要计入跨度与行数
+        if cur is None:
+            cur = {"lo": i, "hi": i, "cols": 0, "rows": 0, "labels": []}
+            tables.append(cur)
+        cur["hi"] = i
+        cur["cols"] = max(cur["cols"], len(cells))
+        cur["rows"] += 1
+        for c in cells:
+            t = re.sub(r"\s+", "", c)
+            if len(t) >= 2 and _FF_CJK_RE.search(t):
+                cur["labels"].append(t)
+    return tables
+
+
+def _ff_main_source(work: Path) -> str:
+    try:
+        data = json.loads((work / "parse" / "sources.json").read_text(encoding="utf-8"))
+        main = data.get("main")
+        if isinstance(main, list) and main:
+            main = main[0]
+        if isinstance(main, dict):
+            main = main.get("path") or main.get("file") or ""
+        return Path(str(main)).name if main else ""
+    except Exception:
+        return ""
+
+
+def _ff_sole_source(work: Path) -> str:
+    """解析产物只有一份时，它就是「同文件」所指（单来源项目没有来源确认单也成立）。"""
+    try:
+        found = [d.name for d in (work / "parse").iterdir()
+                 if d.is_dir() and (d / (Path(d.name).stem + ".md")).is_file()]
+    except Exception:
+        return ""
+    return found[0] if len(found) == 1 else ""
+
+
+def ff_tpl_registry(work: Path) -> dict[str, dict]:
+    """分析登记表模板表：TPL 编号 → {name, file, ranges}。
+
+    编号=模板表内的行序（与 check_writing 的登记表读取同一约定：首列写「TPL-09」
+    还是纯序号都按行序编号）。出处里的「同文件」沿用表内最近出现的文件名（种子=
+    登记表头部「> 来源文件：」声明）；都没有时依次退到 sources.json 的主文件、唯一
+    的那份解析产物——真机工作区实测有来源确认单缺失、头部没写文件名的，「同文件」
+    解析不出文件会让整份核对静默失效。"""
+    path = work / "analysis" / "requirements-format.md"
+    if not path.is_file():
+        return {}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    seed = ""
+    for ln in text.splitlines()[:12]:
+        m = _FF_HDR_SOURCE_RE.match(ln.strip())
+        if m:
+            seed = m.group(1).strip()
+            break
+    fallback = _ff_main_source(work) or _ff_sole_source(work)
+    out: dict[str, dict] = {}
+    header: list[str] | None = None
+    src_idx = name_idx = 0
+    last_file = seed
+    for r in _ff_md_rows(text):
+        joined = "".join(r)
+        has_src = any("出处" in c or "线索" in c for c in r)
+        if "模板名称" in joined and has_src:
+            header = r
+            src_idx = next((i for i, c in enumerate(r) if "出处" in c or "线索" in c), len(r) - 1)
+            name_idx = next((i for i, c in enumerate(r) if "模板名称" in c), 0)
+            continue
+        if header is None:
+            continue
+        if has_src and ("序号" in joined or len(r) != len(header)):
+            header = None  # 另一张登记表的表头：关表，后面的行不属于模板表
+            continue
+        r = (r + [""] * len(header))[:len(header)]
+        src = r[src_idx]
+        fm = re.match(r"^(\S+?\.(?:docx|pdf|txt|md))(?=\s|[（(]|$)", src)
+        if fm:
+            last_file = fm.group(1)
+        out[f"TPL-{len(out) + 1:02d}"] = {
+            "name": r[name_idx],
+            "file": last_file or fallback,
+            "ranges": [(int(a), int(b or a)) for a, b in _FF_RANGE_RE.findall(src)],
+        }
+    return out
+
+
+def ff_outline_tpl(md_text: str) -> list[tuple[str, str, list[str]]]:
+    """目录「来源标注」：[(响应文件名, 叶子标题, [TPL 编号])]——用户在 G3 确认过的树，
+    指引依据列漏记 TPL 时（真机事故里评分索引表就是）仍能查到节与原件的对应。"""
+    out: list[tuple[str, str, list[str]]] = []
+    vol, sec = "", None
+    for raw in md_text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("# 响应文件："):
+            vol, sec = line[len("# 响应文件："):].strip(), None
+        elif line.startswith("## "):
+            sec = line[3:].strip()
+        elif sec == "来源标注" and line.lstrip().startswith("- ") and " :: " in line:
+            name, rest = line.strip()[2:].split(" :: ", 1)
+            ids = [f"TPL-{int(n):02d}" for n in _FF_TPL_ANY_RE.findall(rest)]
+            if ids:
+                out.append((vol, name.strip(), ids))
+    return out
+
+
+def _ff_same_leaf(a: str, b: str) -> bool:
+    return re.sub(r"\s+", "", a) == re.sub(r"\s+", "", b) or sanitize_name(a) == sanitize_name(b)
+
+
+def format_fidelity(work: Path, allow: set[str] | None = None, only: Path | None = None) -> list[str]:
+    """格式件保真核对：挂了 TPL 的节，节内表格须与招标原件的格式表同一网格。
+    返回问题清单（空=通过）；只读不落盘。原件比对依据是解析 md（不依赖招标 docx
+    还在不在）：素材列给了同文件更窄区间时按交集核对（一个 TPL 登记多个备选模板、
+    本节只取其一时不误报）；解析产物不在时无从比对，跳过不拦。"""
+    work = Path(work)
+    body_dir = work / "body"
+    outline_path = work / "outline" / "tender-response-docs.md"
+    if not body_dir.is_dir() or not outline_path.is_file():
+        return []
+    registry = ff_tpl_registry(work)
+    if not registry:
+        return []
+    outline_text = outline_path.read_text(encoding="utf-8", errors="replace")
+    volumes = parse_outline(outline_text)
+    single = len(volumes) == 1
+    out_rows = ff_outline_tpl(outline_text)
+    guide_rows = [r for r in _ff_md_rows(_ff_read(body_dir / "写作指引.md")) if r[0].strip() != "节"]
+    allow = allow or set()
+    md_tables: dict[str, list[dict]] = {}
+    issues: list[str] = []
+    if only is not None:
+        sections = [Path(only)]
+    else:
+        sections = sorted(p for p in list(body_dir.glob("*.docx")) + list(body_dir.glob("*/*.docx"))
+                          if not p.name.startswith(("整本-", "~$", ".~")))
+    for p in sections:
+        if not p.is_file():
+            continue
+        stem = p.stem
+        in_vol = p.parent != body_dir
+        vol_dir = p.parent.name if in_vol else ""
+        if re.sub(r"\s+", "", stem) in allow or re.sub(r"\s+", "", f"{vol_dir}/{stem}") in allow:
+            continue
+        row = next((r for r in guide_rows if _ff_same_leaf(r[0].rsplit("/", 1)[-1], stem)), None)
+        # 节与原件的对应只认目录「来源标注」（用户在目录确认门确认过的树；模板编号没被
+        # 任何节引用时 check_outline 会报警）。指引依据列是模型写的，错挂 TPL 会把无关
+        # 的节拖进来误报（测试夹具的封面行挂了评分索引表的模板）
+        ids: list[str] = []
+        for ovol, otitle, oids in out_rows:
+            if ((single and not in_vol) or (not single and sanitize_name(ovol) == vol_dir)) \
+                    and _ff_same_leaf(otitle, stem):
+                ids += oids
+        hits: list[tuple[dict, str, str]] = []  # (原件表, TPL 编号, 模板名)
+        for tid in dict.fromkeys(ids):
+            entry = registry.get(tid)
+            if not entry or not entry["ranges"] or not entry["file"]:
+                continue
+            fname = entry["file"]
+            md = work / "parse" / fname / (Path(fname).stem + ".md")
+            if not md.is_file():
+                continue
+            if fname not in md_tables:
+                md_tables[fname] = _ff_md_tables(md.read_text(encoding="utf-8", errors="replace").splitlines())
+            material = []
+            for tok in ((row[3] if row is not None else "") or "").split("，"):
+                mm = _FF_MATERIAL_RE.match(tok.strip())
+                if mm and re.split(r"[/\\]", mm.group(1))[-1] == fname:
+                    material.append((int(mm.group(2)), int(mm.group(3) or mm.group(2))))
+            eff: list[tuple[int, int]] = []
+            for lo, hi in entry["ranges"]:
+                cuts = [(max(lo, a), min(hi, b)) for a, b in material if a <= hi and b >= lo]
+                eff += cuts or [(lo, hi)]
+            for t in md_tables[fname]:
+                for lo, hi in eff:
+                    # 表头行落在区间内（留一行余量），或区间盖过半张表——算这张原件表的账
+                    covered = min(t["hi"], hi) - max(t["lo"], lo) + 1
+                    if covered >= 1 and (t["lo"] >= lo - 1 or covered * 2 >= t["hi"] - t["lo"] + 1):
+                        hits.append((t, tid, entry["name"]))
+                        break
+        if not hits:
+            continue
+        doc = Document(str(p))
+        sec_tabs: list[tuple[int, int]] = []
+        sec_texts: set[str] = set()
+        for t in doc.tables:
+            grid = t._tbl.find(qn("w:tblGrid"))
+            try:
+                cols = len(grid.findall(qn("w:gridCol"))) if grid is not None else len(t.columns)
+            except Exception:
+                cols = 0
+            sec_tabs.append((cols, len(t.rows)))
+            seen: list = []
+            for table_row in t.rows:
+                for cell in table_row.cells:
+                    if any(cell._tc is tc for tc in seen):
+                        continue
+                    seen.append(cell._tc)
+                    sec_texts.add(re.sub(r"\s+", "", cell_text_full(cell)))
+        tag = "、".join(dict.fromkeys(f"{tid} {name}".strip() for _, tid, name in hits))
+        origins = "、".join(f"L{t['lo']}" + (f"-L{t['hi']}" if t["hi"] != t["lo"] else "")
+                           + f"（{t['rows']} 行 × {t['cols']} 列）" for t, _, _ in hits)
+        if not sec_tabs:
+            issues.append(f"{p.name} 是招标格式件（{tag}），原件 {origins} 有表格，节内没有表格"
+                          f"——格式件的表只许 copy-from 拷原件后往空格里填，不许删掉或换成段落、图片")
+            continue
+        shape = "、".join(f"{r} 行 × {c} 列" for c, r in sec_tabs)
+        for t, tid, name in hits:
+            if any(c == t["cols"] for c, _ in sec_tabs):
+                labels = list(dict.fromkeys(t["labels"]))
+                kept = [x for x in labels if any(x in s for s in sec_texts)]
+                if labels and len(kept) * 2 < len(labels):
+                    issues.append(f"{p.name} 招标格式件表格列数与原件一致，但原件标签只保留 "
+                                  f"{len(kept)}/{len(labels)}（{tid} {name}）——核对是否重建了表")
+                continue
+            lost = [x for x in dict.fromkeys(t["labels"]) if not any(x in s for s in sec_texts)]
+            issues.append(f"{p.name} 招标格式件表格与原件不一致（{tid} {name}）：原件 L{t['lo']}-L{t['hi']} "
+                          f"{t['rows']} 行 × {t['cols']} 列，节内表格 {shape}"
+                          + (f"；原件标签缺失：{'、'.join(lost[:8])}" if lost else "")
+                          + "——行列与合并格一个不动，只许 copy-from 拷原件后往空格里填")
+    return issues
+
+
+def _ff_read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- assemble
 
 def parse_outline(md_text: str) -> list[dict]:
@@ -2570,8 +2847,22 @@ def cmd_assemble(args) -> None:
         die(f"目录文件不存在：{outline_path}（先完成目录树）")
     volumes = parse_outline(outline_path.read_text(encoding="utf-8"))
     if not volumes:
-        die("目录文件未解析出任何响应文件（核对「# 响应文件：X」标题与树格式）")
+        die(f"目录文件未解析出任何响应文件（核对「# 响应文件：X」标题与树格式）")
     body_dir = work / "body"
+    # 格式件保真（入口红线 8）：招标给了格式的表只许拷原件填空——节内表格与原件对不上
+    # 就拒绝合册。缺料类问题带批注照常合册，废标级红线不在此列；核对自身出错只告警
+    # （保真核对是防线，不许反过来变成交付故障点）
+    try:
+        broken = format_fidelity(work, allow=allow_format_set(getattr(args, "allow_format_change", "")))
+    except Exception as exc:  # noqa: BLE001
+        broken = []
+        print(f"  ⚠️ 格式件保真核对未能执行（{type(exc).__name__}），请人工确认格式件表格与招标原件一致")
+    if broken:
+        print("[合册被拦] 招标格式件表格与原件不一致——擅自改格式件是废标级红线，先修复再合册：")
+        for b in broken:
+            print(f"- {b}")
+        print(f"  {_FF_FIX}")
+        sys.exit(2)
     multi = len(volumes) > 1
     warnings: list[str] = []
 
@@ -2707,7 +2998,8 @@ def cmd_assemble(args) -> None:
             warnings.append("目录树中无「目录」节点——未生成目录页，且全文按前置区处理（无章节编号）")
         scan_dir = body_dir / sanitize_name(vol["name"]) if multi else body_dir
         for f in sorted(scan_dir.glob("*.docx")):
-            if f.name.startswith("整本-") or f in used_files or f in container_files:
+            # ~$节.docx / .~节.docx 是 Word/WPS 打开节文件时落的占用锁文件（隐藏），不是产物
+            if f.name.startswith(("整本-", "~$", ".~")) or f in used_files or f in container_files:
                 continue
             warnings.append(f"目录外文件：{f.as_posix()}（不在目录树中，未并入）")
         # 批注迁移 + 打开自动刷新域（目录出真页码）+ 前置整节不编页码（封面/
@@ -3064,12 +3356,52 @@ def _merge_comments(master: Document, used_files: set[Path]) -> int:
 
 # ---------------------------------------------------------------- toc-pages（静态目录条目补实测页码）
 
-def _find_soffice() -> str | None:
+def _soffice_registered() -> list[str]:
+    """Windows 注册表登记的 LibreOffice 安装目录（安装器写在 SOFTWARE\\LibreOffice\\UNO\\InstallPath，
+    32/64 位各一处）；非 Windows 或读不到返回空，任何异常都只是少一个候选。"""
+    try:
+        import winreg
+    except ImportError:
+        return []
+    out: list[str] = []
+    views = dict.fromkeys((0, getattr(winreg, "KEY_WOW64_32KEY", 0), getattr(winreg, "KEY_WOW64_64KEY", 0)))
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for view in views:
+            try:
+                with winreg.OpenKey(hive, r"SOFTWARE\LibreOffice\UNO\InstallPath", 0,
+                                    winreg.KEY_READ | view) as key:
+                    val = winreg.QueryValueEx(key, "")[0]
+            except OSError:
+                continue
+            if val:
+                out.append(str(val).rstrip("\\/") + "\\")
+    return out
+
+
+def _soffice_candidates() -> list[str]:
+    """LibreOffice 可执行文件候选，按优先级排列（存在性由 _find_soffice 逐个探测）。
+
+    Windows 安装器不写 PATH，只认 which 会把装好的 LibreOffice 判成「未找到」。
+    soffice.com 是控制台版：转换完才返回、报错有输出可回显；soffice.exe 同目录
+    并存，缺 .com 才用。当前用户级安装落在 LOCALAPPDATA，装在非默认位置靠注册表。
+    """
     import shutil
-    for cand in (shutil.which("soffice"), shutil.which("libreoffice"),
-                 "/Applications/LibreOffice.app/Contents/MacOS/soffice",
-                 "/usr/bin/soffice", "/opt/homebrew/bin/soffice",
-                 "/opt/homebrew/bin/libreoffice"):
+    env = os.environ
+    out = [w for w in (shutil.which("soffice"), shutil.which("libreoffice")) if w]
+    dirs = [Path(root) / "LibreOffice" / "program"
+            for root in (env.get("ProgramFiles"), env.get("ProgramW6432"), env.get("ProgramFiles(x86)"))
+            if root]
+    if env.get("LOCALAPPDATA"):
+        dirs.append(Path(env["LOCALAPPDATA"]) / "Programs" / "LibreOffice" / "program")
+    dirs += [Path(p) for p in _soffice_registered()]
+    out += [str(d / exe) for d in dirs for exe in ("soffice.com", "soffice.exe")]
+    out += ["/Applications/LibreOffice.app/Contents/MacOS/soffice", "/usr/bin/soffice",
+            "/usr/local/bin/soffice", "/opt/homebrew/bin/soffice", "/opt/homebrew/bin/libreoffice"]
+    return out
+
+
+def _find_soffice() -> str | None:
+    for cand in _soffice_candidates():
         if cand and Path(cand).exists():
             return cand
     return None
@@ -3078,11 +3410,14 @@ def _find_soffice() -> str | None:
 def _lo_convert(soffice: str, docx_path: Path, outdir: Path, profile: Path) -> Path:
     import subprocess
 
-    cmd = [soffice, "--headless",
-           f"-env:UserInstallation=file://{profile}",
+    # 配置目录地址必须由 as_uri 生成：手工拼 file://+路径 在 Windows 上是坏地址（盘符
+    # 冒号、反斜杠），路径含空格/# 也不转义——地址坏了 LibreOffice 就退回默认配置，
+    # 界面版开着时转换被转交给它、本进程拿不到产物
+    cmd = [soffice, "--headless", f"-env:UserInstallation={Path(profile).resolve().as_uri()}",
            "--convert-to", "pdf", "--outdir", str(outdir), str(docx_path)]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        # errors="replace"：text=True 缺省严格解码，输出含本机代码页外的字节就抛异常
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
     except subprocess.TimeoutExpired:
         die("LibreOffice 转 PDF 超时（300s）——可跳过本步，交付仍以 Word/WPS 导出为准")
     pdf = outdir / (docx_path.stem + ".pdf")
@@ -3192,6 +3527,13 @@ def _measure_heading_pages(pdf_path: Path, labels: list[str],
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(str(pdf_path))
+    try:
+        return _heading_pages_in(pdf, labels, restart)
+    finally:
+        pdf.close()  # 异常路径也关：Windows 下留着句柄，临时目录清理会失败并盖掉真正的报错
+
+
+def _heading_pages_in(pdf, labels: list[str], restart: bool) -> dict[str, int]:
     pages_lines: list[list[str]] = []
     has_leader: list[bool] = []
     for i in range(len(pdf)):
@@ -3225,7 +3567,6 @@ def _measure_heading_pages(pdf_path: Path, labels: list[str],
             if _page_has_heading(pages_lines[i], want):
                 mapping[label] = i + 1 - off
                 break
-    pdf.close()
     return mapping
 
 
@@ -3367,6 +3708,14 @@ def _xref_audit(docx_path: Path, mapping: dict[str, int]) -> None:
               f"（最近：{label}，页 {mapping.get(label, '?')}），请核对")
 
 
+def _tempdir():
+    """工作用临时目录。Windows 下目录里只要还有一个没关的文件句柄（或刚退出的
+    LibreOffice 还占着配置文件），清理就抛 PermissionError（WinError 32）并盖掉
+    真正的报错——清理失败只留目录不抛，系统临时目录自会回收。"""
+    import tempfile
+    return tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+
+
 def cmd_toc_pages(args) -> None:
     docx_path = Path(args.docx)
     if not docx_path.is_file():
@@ -3374,7 +3723,8 @@ def cmd_toc_pages(args) -> None:
     soffice = args.soffice or _find_soffice()
     if not soffice or not Path(soffice).exists():
         print("[目录页码跳过] 环境未找到 LibreOffice——目录页码由 Word/WPS 打开合册文件时"
-              "自动刷新，交付 PDF 用 Word/WPS 导出即可，本步可忽略")
+              "自动刷新，交付 PDF 用 Word/WPS 导出即可，本步可忽略"
+              "（已安装但装在非默认位置：加 --soffice 指到 soffice 可执行文件）")
         return
     labels = _toc_entry_labels(docx_path)
     if not labels:
@@ -3386,12 +3736,10 @@ def cmd_toc_pages(args) -> None:
         docx_path.write_bytes(original)
         die(msg)
 
-    import tempfile
-
     restart = _has_pagenum_restart(docx_path)
     if restart:
         print("  页码口径：前置（封面/目录）不编页码，目录条目写正文页号（自 1 起）")
-    with tempfile.TemporaryDirectory() as td:
+    with _tempdir() as td:
         tmp = Path(td)
         profile = tmp / "profile"
         # 收敛闭环：实测→回填→复测。页码回填会改目录占行，正文跟着再漂——
@@ -3600,6 +3948,9 @@ def main() -> None:
                          "导航全扁平、F9 刷目录丢二级以下条目——默认关闭")
     sp.add_argument("--template", help="版式模板 docx（缺省用包内基准模板；用户模板的"
                                        "页面设置与页眉页脚原样保留）")
+    sp.add_argument("--allow-format-change", default="",
+                    help="用户已在对话里明确同意改表格式的节名，逗号分隔（节文件名主干）——"
+                         "格式件保真核对对这些节放行；擅自改招标格式件是废标级红线，无用户同意不得使用")
     sp.set_defaults(func=cmd_assemble)
 
     sp = sub.add_parser("compact", help="正文段固定行距压缩（大字号/含图/目录段保护常开）")

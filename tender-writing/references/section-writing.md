@@ -82,6 +82,13 @@ python3 tender-docx/scripts/docx_toolkit.py diagram gantt.png --kind gantt --spe
   空行不够时（如评分索引表要逐评分项一行、模板每组只给 5 空行）用
   `revise --cell T#R#C1 --mode insert_after` 克隆该行网格插空行，插行后重读
   坐标再填；跨列合并行（组行）只有锚点格可写，revise 会拦下延续位写入并指路；
+- **格式件的表只填不改（废标级红线）**：行列、合并格、标签文字一个不动——不用
+  body 的 table 块重画格式表，不删表、不并表、不改列；贴图的方框同样保留原表，
+  图片贴在方框之后。填完嫌版面难看（窄列折行、长值撑高行、一字一行）也不动表：
+  `comment --cell` 在该格加批注「版面请手动调整列宽」，由用户在 Word 里处理。
+  `check_writing --section` 与合册都会拿节内表格比对招标原件（列数对不上、原件
+  标签丢失、整张表不在即拦）；确有用户在对话里明确同意改结构的节，校验与合册加
+  `--allow-format-change "<节名>"` 放行；
 - pdf 原件无可拷元素 → 内容一次成形于 `create` 的 paragraphs（换行分段），
   微调走 revise；
 - **公司事实填空优先级**（资质证书/注册信息/体系认证/注册资本/员工数等

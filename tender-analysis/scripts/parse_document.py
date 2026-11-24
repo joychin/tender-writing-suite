@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -366,14 +367,54 @@ def _finalize_transcript(sections: dict[int, list[str]], n_pages: int, L: Lines)
 
 # ---------------------------------------------------------------- .doc 通道
 
+def _soffice_registered() -> list[str]:
+    """Windows 注册表登记的 LibreOffice 安装目录（安装器写在 SOFTWARE\\LibreOffice\\UNO\\InstallPath，
+    32/64 位各一处）；非 Windows 或读不到返回空，任何异常都只是少一个候选。"""
+    try:
+        import winreg
+    except ImportError:
+        return []
+    out: list[str] = []
+    views = dict.fromkeys((0, getattr(winreg, "KEY_WOW64_32KEY", 0), getattr(winreg, "KEY_WOW64_64KEY", 0)))
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for view in views:
+            try:
+                with winreg.OpenKey(hive, r"SOFTWARE\LibreOffice\UNO\InstallPath", 0,
+                                    winreg.KEY_READ | view) as key:
+                    val = winreg.QueryValueEx(key, "")[0]
+            except OSError:
+                continue
+            if val:
+                out.append(str(val).rstrip("\\/") + "\\")
+    return out
+
+
+def _soffice_candidates() -> list[str]:
+    """LibreOffice 可执行文件候选，按优先级排列（存在性由 _find_soffice 逐个探测）。
+
+    与 docx_toolkit（交付环节）的同名函数同口径（改一处同步另一处）。
+    Windows 安装器不写 PATH，只认 which 会把装好的 LibreOffice 判成「未找到」。
+    soffice.com 是控制台版：转换完才返回、报错有输出可回显；soffice.exe 同目录
+    并存，缺 .com 才用。当前用户级安装落在 LOCALAPPDATA，装在非默认位置靠注册表。
+    """
+    import shutil
+    env = os.environ
+    out = [w for w in (shutil.which("soffice"), shutil.which("libreoffice")) if w]
+    dirs = [Path(root) / "LibreOffice" / "program"
+            for root in (env.get("ProgramFiles"), env.get("ProgramW6432"), env.get("ProgramFiles(x86)"))
+            if root]
+    if env.get("LOCALAPPDATA"):
+        dirs.append(Path(env["LOCALAPPDATA"]) / "Programs" / "LibreOffice" / "program")
+    dirs += [Path(p) for p in _soffice_registered()]
+    out += [str(d / exe) for d in dirs for exe in ("soffice.com", "soffice.exe")]
+    out += ["/Applications/LibreOffice.app/Contents/MacOS/soffice", "/usr/bin/soffice",
+            "/usr/local/bin/soffice", "/opt/homebrew/bin/soffice", "/opt/homebrew/bin/libreoffice"]
+    return out
+
+
 def _find_soffice() -> str | None:
-    exe = shutil.which("soffice") or shutil.which("libreoffice")
-    if exe:
-        return exe
-    for cand in ("/Applications/LibreOffice.app/Contents/MacOS/soffice",
-                 "/usr/bin/soffice", "/usr/local/bin/soffice",
-                 "/opt/homebrew/bin/soffice"):
-        if Path(cand).is_file():
+    for cand in _soffice_candidates():
+        if cand and Path(cand).exists():
             return cand
     return None
 
@@ -383,10 +424,12 @@ def _doc_to_docx(src: Path, out_root: Path) -> Path:
     soffice = _find_soffice()
     if not soffice:
         die(".doc 解析需要 LibreOffice 自动转换：未检测到 soffice。"
-            "请安装 LibreOffice，或将文件用 Word/WPS 另存为 .docx 后重试")
+            "请安装 LibreOffice（默认安装位置会自动识别），或将文件用 Word/WPS 另存为 .docx 后重试")
     out_root.mkdir(parents=True, exist_ok=True)
-    profile = (out_root / ".lo-profile").resolve()  # 绝对路径：相对路径会让 file:// URL 失效、soffice 挂起
-    cmd = [soffice, "--headless", f"-env:UserInstallation=file://{profile.as_posix()}",
+    # 配置目录地址必须由 as_uri 生成：绝对路径，否则 file:// URL 失效、soffice 挂起；
+    # 手工拼 file://+路径 在 Windows 上是坏地址（盘符冒号、反斜杠），含空格/# 也不转义
+    profile = (out_root / ".lo-profile").resolve()
+    cmd = [soffice, "--headless", f"-env:UserInstallation={profile.as_uri()}",
            "--convert-to", "docx", "--outdir", str(out_root), str(src)]
     try:
         subprocess.run(cmd, capture_output=True, timeout=300, check=False)
@@ -437,6 +480,7 @@ def parse_passthrough(src: Path, L: Lines) -> tuple[str, list[str]]:
             continue
     if text is None:
         die("无法识别文件编码（已尝试 UTF-8 / GB18030 / UTF-16）")
+    text = text.lstrip("\ufeff")  # 带 BOM 的 UTF-8（Windows 记事本/PowerShell 另存）：留着会让首行标题识别不到
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     for line in text.split("\n"):
         L.emit(line.rstrip())

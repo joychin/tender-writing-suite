@@ -443,7 +443,7 @@ def _comments_scan(work: Path) -> list[dict]:
     if not body.is_dir():
         return out
     cands = [p for p in sorted(body.rglob("*.docx"))
-             if not (p.stem.startswith("整本-") or p.name.startswith("~$"))]
+             if not p.name.startswith(("整本-", "~$", ".~"))]  # 末两类是 Word/WPS 占用锁文件
     if not cands:
         return out
     try:
@@ -635,6 +635,10 @@ def main() -> None:
               "（带版本参数——宿主预览面板对相同 URL 不重新加载，带参链接点击即强制重载出最新数据；"
               "按门追加锚点 #tab=tree / #tab=guide / #tab=promise / #tab=overview；"
               "每道门重跑本命令后复制新的回显链接，勿复用旧链接）")
+    else:
+        print("[交付链接] 服务未起，暂不可用——先跑 serve_review.py 起服务，"
+              "再重跑本命令取带 ?v= 的交付链接（服务模式 GET 实时读盘，"
+              "页面数据以最新产物为准）")
     print("[停轮提醒] 以 Markdown 链接或文件指引让用户打开页面，本轮停轮等答复（指针带「需要你补充」表格；固定告知：不补充也可以继续——缺失部分以 Word 批注标注）"
           "（用户已明确授权连续模式除外）。"
           "用户回「继续/先这样」只越过本门等待、推进到下一门产物落盘为止，"

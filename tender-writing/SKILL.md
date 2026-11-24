@@ -13,7 +13,7 @@ examples_en:
   - "The outline is approved — start writing the sections"
   - "Continue with the next technical section"
   - "Run the global validation on commitments and duplication"
-version: 2.2.0
+version: 2.2.3
 author: 灵燕智能
 ---
 
@@ -67,7 +67,7 @@ author: 灵燕智能
 @references/section-writing.md**：三模式细则、工具链速查（docx_toolkit 在
 `tender-docx/scripts/`）、素材三级落地、语言纪律都在其中。核心路由：素材修订 =
 copy-from 注入素材授权区间（保真）→ revise 适配；格式跟随 = copy-from 拷格式件
-区间 → revise 填空（未定值批注）；推理撰写 = create 的 body 块一次成形（表格用
+区间 → revise 填空（表格只填不改，嫌版面难看加批注请用户手动处理；未定值批注）；推理撰写 = create 的 body 块一次成形（表格用
 table 块，不流水句铺）。每节写完跑 `check_writing.py --section "<节.docx>"` 自查；
 多节分派跑 `python3 scripts/build_dispatch.py --work work --sections "节A,节B"`
 生成批次提示词（规则见细则）。
@@ -78,11 +78,12 @@ table 块，不流水句铺）。每节写完跑 `check_writing.py --section "<�
 结果全量在进度面板——对话只给结论级汇报），**校验跑完直接进第七步合册**——
 合册代价小（秒级重跑）、用户调整都在整本层做，**禁止问「现在合册还是先补齐」
 类岔口**；补齐清单进进度页与收尾汇报，由用户拿到整本后处理（issue 未清零也
-合册，收尾逐条点名）。**收尾对话口径：交付物=整本 Word 文档——「合册」是
+合册，收尾逐条点名）——招标格式件表格与原件不一致除外，那是废标级红线（入口
+红线 8）：先修复再合册，合册也会拒绝。**收尾对话口径：交付物=整本 Word 文档——「合册」是
 内部动作，不进对话、不作提问**（reply-style 硬规则 9）：
 
 ```bash
-python3 scripts/check_writing.py            # 承诺比对 + 节间查重 + 残留扫描
+python3 scripts/check_writing.py            # 承诺比对 + 节间查重 + 残留扫描 + 招标格式件表格比对
 python3 scripts/check_writing.py --old-names "旧公司名,旧项目名"   # 素材改写后必查残留
 python3 scripts/check_writing.py --json work/review/check-result.json   # 落盘供进度面板读，收尾必带
 ```

@@ -5,8 +5,9 @@
     python3 check_writing.py --guide                 校验写作指引（格式契约）
     python3 check_writing.py --analysis              校验分析登记表（coverage + 出处引用三层）
     python3 check_writing.py --outline               目录来源标注对账（悬空/未引用来源ID）
-    python3 check_writing.py --section <节.docx>     单节自查（占位/残字/素材使用率/残留）
+    python3 check_writing.py --section <节.docx>     单节自查（占位/残字/素材使用率/残留/格式件保真）
     python3 check_writing.py [--old-names "a,b"]     全局：承诺比对 + 节间查重 + 占位清点 + 残留
+                                                     + 格式件保真（红线：挂 TPL 的节表格须同原件）
 
 本模块同时是共用纯函数的落点（build_review / apply_review / build_dispatch 从这里
 import，依赖方向恒为 上游→本模块，禁止反向）：table_rows / _read / _resolve_source /
@@ -50,8 +51,8 @@ def _sibling_scripts(name: str) -> Path:
 _DOCX_SCRIPTS = _sibling_scripts("tender-docx")
 sys.path.append(str(_DOCX_SCRIPTS))
 from docx_toolkit import (  # noqa: E402
-    build_tree, cell_text_full, iter_blocks, para_text_full, parse_outline,
-    require_docx, sanitize_name,
+    allow_format_set, build_tree, cell_text_full, format_fidelity, iter_blocks, para_text_full,
+    parse_outline, require_docx, sanitize_name,
 )
 
 # python-docx 惰性加载：顶层 import 会让未装依赖的环境（沙箱评测、纯净解释器）
@@ -112,6 +113,16 @@ _COVERAGE_HEAD = re.compile(
 NOTE_TOOL_RE = re.compile(r"parse_document|docx_toolkit|check_writing|build_review"
                           r"|serve_review|apply_review|build_dispatch|python3|--\w+")
 NOTE_ANAPHORA_RE = re.compile(r"上述|以上|前述|上表|前面|前文")
+# 指引缺口/备注列里的格式件结构变更（warning 级）：「改为两列」「重排为可填表」是
+# 擅自改招标格式件的决定，写进指引就等于下达施工令（之江实验室项目真机事故：
+# 备注一句「改为两列项目/内容表」，两列键值表一路写到交付稿）。硬拦在节文件层的
+# 格式件保真核对，这里只在决定刚落纸时提醒一句
+NOTE_FORMAT_RESTRUCTURE = re.compile(
+    r"(?:改为|改成|重排为|重做成|调整为|简化为|换为)[^，；。|]{0,10}"
+    r"(?:两列|三列|多列|键值|可填表|简表|项目[／/]内容)"
+    r"|(?:无法|不能|没法)[^，；。|]{0,6}(?:逐格|按原表|原样)")
+# 格式件保真问题在问题清单里的识别（红线指令替换「校验跑完直接合册」用）
+FORMAT_ISSUE_RE = re.compile(r"招标格式件")
 
 
 def die(msg: str, code: int = 1):
@@ -548,7 +559,10 @@ def check_outline(work: Path) -> tuple[list[str], list[str]]:
         warnings.append(f"未被任何目录节点引用的来源ID（{len(unused)} 个）："
                         f"{'、'.join(unused[:12])}" + ("…" if len(unused) > 12 else "")
                         + "——逐条处置：能归位的修订目录；确属无需对应章节的（扣分项/"
-                          "后续轮次报价等）收尾汇报必须点名列出，不得只字不提")
+                          "后续轮次报价等）收尾汇报必须点名列出，不得只字不提。"
+                          "不要为消警告硬挂来源或改交付形态（如封面样例是图片却改成"
+                          "「模板或附件填充」）——未引用本身不是错误，处置理由要经得起"
+                          "原文核对")
     return issues, warnings
 
 
@@ -630,6 +644,10 @@ def check_guide(work: Path) -> tuple[list[str], list[str]]:
         if NOTE_ANAPHORA_RE.search(note):
             warnings.append(f"「{key}」缺口/备注列代词回指（上述/以上/前述）——摘出独立展示"
                             f"后读不通，写具体字段名")
+        if ("格式跟随" in mode or "TPL" in r[2].upper()) and NOTE_FORMAT_RESTRUCTURE.search(note):
+            warnings.append(f"「{key}」缺口/备注列写了格式件结构变更——招标格式件的表只拷不改"
+                            f"（擅自改格式是废标级红线），删掉这句；原件表格再难填也只写怎么填，"
+                            f"版面问题在节内加批注请用户手动处理")
     for use_key, where in material_use.items():
         if len(where) > 1:
             issues.append(f"同一素材区间进多节（{use_key}）：{'、'.join(where)}——同一内容区间不得进两节")
@@ -667,7 +685,7 @@ def figure_gaps(stem: str, row: list[str] | None, doc: Document,
 
 # ---------------------------------------------------------------- --section
 
-def check_section(work: Path, section: Path) -> tuple[list[str], list[str]]:
+def check_section(work: Path, section: Path, allow: set[str] | None = None) -> tuple[list[str], list[str]]:
     issues: list[str] = []
     warnings: list[str] = []
     text, labeled = docx_text(section)
@@ -753,6 +771,8 @@ def check_section(work: Path, section: Path) -> tuple[list[str], list[str]]:
                 stem_hint = Path(fname).stem
                 if len(stem_hint) >= 4 and norm(stem_hint) not in norm("招标文件") and stem_hint in text:
                     warnings.append(f"疑似残留（素材文件名主干出现在正文）：{stem_hint}——逐条核对，通用术语在收尾说明")
+    # 格式件保真（红线）：挂了 TPL 的节，节内表格须与招标原件格式表同一网格
+    issues += format_fidelity(work, allow=allow, only=section)
     return issues, warnings
 
 
@@ -803,15 +823,17 @@ def deviation_gaps(gdocs: dict, work: Path) -> list[str]:
     return warnings
 
 
-def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]]:
+def check_global(work: Path, old_names: list[str], allow: set[str] | None = None) -> tuple[list[str], list[str]]:
     issues: list[str] = []
     warnings: list[str] = []
     body_dir = work / "body"
     if not body_dir.is_dir():
         return ["work/body/ 不存在"], warnings
+    # ~$节.docx / .~节.docx 是 Word/WPS 打开节文件时落的占用锁文件（隐藏）：不是 zip，
+    # 当节文件读会直接抛 PackageNotFoundError 拖垮整次全局校验
     sections = sorted(
         p for p in list(body_dir.glob("*.docx")) + list(body_dir.rglob("*/*.docx"))
-        if not p.name.startswith("整本-")
+        if not p.name.startswith(("整本-", "~$", ".~"))
     )
     if not sections:
         warnings.append("work/body/ 下没有节文件")
@@ -860,6 +882,14 @@ def check_global(work: Path, old_names: list[str]) -> tuple[list[str], list[str]
 
     # 偏离表完整性（报告不是门）：响应列空行 + 与 REQ 登记条数对账
     warnings += deviation_gaps(gdocs, work)
+
+    # 格式件保真（红线）：挂了 TPL 的节，节内表格须与招标原件格式表同一网格。
+    # 核对自身出错只告警——保真核对是防线，不许反过来拖垮收尾校验
+    try:
+        issues += format_fidelity(work, allow=allow)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"格式件保真核对未能执行（{type(exc).__name__}），"
+                        f"请人工确认格式件表格与招标原件一致")
 
     # 承诺比对 + 旧值快照（清单值变更时旧值自动纳入残留扫描）
     promise_path = body_dir / "关键事实与承诺.md"
@@ -951,6 +981,13 @@ _G6_DIRECTIVE = ("[G6 指令] 校验跑完直接进第七步合册（载入 tend
                  "不向用户问「合册还是先补齐」类岔口；补齐项以 Word 批注承载，"
                  "收尾汇报逐条点名并带写作进度面板 Markdown 链接。对话口径：交付物="
                  "整本 Word 文档——「合册」是内部动作，不进对话、不作提问。")
+# 缺料类问题带批注照常合册；招标格式件被改结构是废标级红线，不在此列——
+# 有格式件问题时用这条替换 G6 指令（合册自身也会拒绝）
+_FORMAT_REDLINE_DIRECTIVE = ("[红线指令] 招标格式件表格与原件不一致——擅自改格式件是废标级红线："
+                             "把点名的节按 copy-from 拷原件、revise 只往空格里填重做，"
+                             "复检通过后再进第七步合册（合册同样会拒绝）；"
+                             "版面难看不改表，加 Word 批注请用户手动处理；"
+                             "用户已在对话里明确同意改结构的节，加 --allow-format-change \"<节名>\" 放行。")
 
 
 def _stage_gate(work: Path) -> None:
@@ -984,10 +1021,14 @@ def main() -> None:
     ap.add_argument("--section", help="单节自查（.docx 路径）")
     ap.add_argument("--old-names", default="", help="残留扫描旧名清单（逗号分隔）")
     ap.add_argument("--json", default="", help="结果落盘 JSON（写作进度面板读它展示；"
-                    "推荐 work/review/check-result.json，控制台输出与退出码不变）")
+                        "推荐 work/review/check-result.json，控制台输出与退出码不变）")
+    ap.add_argument("--allow-format-change", default="",
+                    help="用户已在对话里明确同意改表格式的节名，逗号分隔（节文件名主干）——"
+                         "格式件保真核对对这些节放行；擅自改招标格式件是废标级红线，无用户同意不得使用")
     args = ap.parse_args()
     _load_docx()  # --help 已在 parse_args 内退出；本命令全部校验都读 docx
     work = Path(args.work)
+    allow = allow_format_set(args.allow_format_change)
 
     if args.guide:
         issues, warnings = check_guide(work)
@@ -996,7 +1037,7 @@ def main() -> None:
         if not sec.is_file():
             die(f"节文件不存在：{sec}")
         _stage_gate(work)
-        issues, warnings = check_section(work, sec)
+        issues, warnings = check_section(work, sec, allow)
     elif args.analysis:
         issues, warnings = check_analysis(work)
     elif args.outline:
@@ -1007,7 +1048,7 @@ def main() -> None:
         if names_file.is_file():
             old_names += [l.strip() for l in names_file.read_text(encoding="utf-8").splitlines()
                           if l.strip()]
-        issues, warnings = check_global(work, old_names)
+        issues, warnings = check_global(work, old_names, allow)
 
     if args.json:
         out = Path(args.json)
@@ -1033,7 +1074,8 @@ def main() -> None:
     for i in issues:
         print(f"- {i}")
     if is_global:
-        print(_G6_DIRECTIVE)
+        print(_FORMAT_REDLINE_DIRECTIVE if any(FORMAT_ISSUE_RE.search(i) for i in issues)
+              else _G6_DIRECTIVE)
     sys.exit(1)
 
 

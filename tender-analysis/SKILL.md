@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document and list the disqualification risks"
   - "Turn the scoring criteria and eligibility thresholds into tables"
   - "Plan the bid response outline for this project"
-version: 2.2.0
+version: 2.2.3
 author: 灵燕智能
 ---
 
@@ -52,6 +52,10 @@ author: 灵燕智能
    `[解析转写待办]` → 按 @references/transcribe-scans.md 誊录后重跑（超页数上限
    先停轮确认）。主文件失败→说清原因停止；补充文件失败→声明降级不可引用。
    素材文件（历史标书/公司资料）为 docx 的也在此一并解析。
+   **不支持的附件格式不得静默跳过**：招标包内出现 `.xlsx/.xls`（报价表常见）
+   等 `parse_document.py` 不收的格式时，用环境可用的表格工具读取，把表名/
+   关键字段/金额结构摘进 analysis；做不到就在报告与指针里点名「该附件未入库，
+   需人工提供或确认」，不许只在收尾提一句。
 3. **G1 门（异常门——仅异常时停轮）**：解析无警示且来源角色已决 → **不产报告
    不停轮**，直接进第二步（解析概况并入 G2 的报告与指针交付）；有解析警示
    （识别降级/可信度低/扫描件待誊录）或来源角色未决 → 待确认事项登记
@@ -76,8 +80,9 @@ author: 灵燕智能
 ## 第三步：目录树
 
 1. **响应文件分解**（@references/response-files.md）：划分结论（拟分 N 册及册
-   名）必报——方案唯一也报；多方案或证据不明**停下来问一次**；未明确
-   选择按最合理方案先行并声明理由。
+   名）必报——方案唯一也报；多方案或证据不明**停下来问一次**（用户刚说过
+   「继续」也要问——那是对上一道门的答复，不是对拆分方案的选择）；只有用户
+   明确说「你定/按你的判断」时才按最合理方案先行并声明理由。
 2. **目录初稿**（@references/outline-generate.md + @references/outline-annotation.md）：
    每响应文件补全 `## 目录`、`## 来源标注`、`## 目录说明` 三段；来源 ID 只引用
    analysis 已有编号；树首固定 `- 封面`，其后 `- 目录`（合册机械生成）。
@@ -85,9 +90,12 @@ author: 灵燕智能
    ③走查定稿；无对应输入跳过并声明）；清理后跑
    `python3 tender-writing/scripts/check_writing.py --outline`
    对账（悬空/未引用来源 ID）。
-4. **G3 门（评审台首建）**：`python3 tender-review/scripts/build_review.py --work work`
-   （不带 `--pages report`），打开目录 tab 停轮等确认；用户改目录落盘后按增量
-   走查回流（页面规程见 @tender-review/references/review-workbench.md）。
+4. **G3 门（评审台首建）**：先起服务
+   `python3 tender-review/scripts/serve_review.py --work work`，再跑
+   `python3 tender-review/scripts/build_review.py --work work`（不带
+   `--pages report`）取回显的 [交付链接]（带 `?v=`），打开目录 tab 停轮等确认；
+   用户改目录落盘后按增量走查回流（页面规程见
+   @tender-review/references/review-workbench.md）。
 
 **树格式红线**：每行 `- ` 开头、无编号前缀、每级缩进 2 空格、独立附件号条目
 平级、不用代码块包裹——违反的行不会被合册解析。

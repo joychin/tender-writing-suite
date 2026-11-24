@@ -18,7 +18,8 @@
   启动时探测存活+healthz+token 匹配则复用同一 URL，否则换端口重启；
 - 进程被杀：服务无状态（GET 实时读盘、POST 立即落盘），重启零损失；页面 5s 心跳
   断开自动降级离线模式（修改保留本页，可导出修改包）；agent 用前 --status 探活；
-- 僵尸进程：默认空闲 2 小时自动退出（--idle-timeout 0 关闭）；SIGTERM 清理 serve.json；
+- 僵尸进程：默认空闲 2 小时自动退出（--idle-timeout 0 关闭）；SIGTERM 清理 serve.json
+  （Windows 没有 SIGTERM 投递，--stop 是强制结束，记录由 --stop 自己清）；
 - 多会话：同一 work 目录共用一个服务（复用 serve.json），不同 work 各自独立。
 
 安全声明：仅环回监听（127.0.0.1）、无外联；POST 校验 Origin/Referer 必须是本机；
@@ -62,17 +63,70 @@ def _write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
-def _pid_alive(pid: int) -> bool:
+def _serve_url(old: dict) -> str:
+    """serve.json → 服务基址；字段缺失或非法返回空串（旧版/损坏的残留文件）。"""
+    port, token = old.get("port"), old.get("token")
+    if isinstance(port, int) and 0 < port < 65536 and isinstance(token, str) and token:
+        return f"http://127.0.0.1:{port}/{token}/"
+    return ""
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Windows 探活：OpenProcess 只读查询。
+
+    Windows 下 os.kill(pid, 0) 不是探活：信号 0 就是 CTRL_C_EVENT，走的是
+    GenerateConsoleCtrlEvent——目标不是进程组组长就抛 WinError 87（OSError），
+    是组长（宿主以新进程组起后台任务时）就等于给评审台发 Ctrl+C 把它关掉。
+    必须走只读的进程查询。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return False
     try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _pid_alive(pid: int) -> bool:
+    """pid 有效且进程存活；探测失败一律按「不存活」处理，绝不抛给调用方。
+
+    Windows 用 OpenProcess 查询（os.kill(pid, 0) 在 Windows 不是探活）；
+    Unix 用 os.kill(pid, 0)。死 pid / 权限不足 / 非法 pid 都返回 False。
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            return _pid_alive_windows(pid)
         os.kill(pid, 0)
         return True
-    except (ProcessLookupError, PermissionError):
+    except Exception:  # noqa: BLE001 — 探活失败一律按不存活，绝不让 --status/--stop 崩
         return False
+
+
+# 环回探活专用 opener：显式不带代理。urlopen 缺省会读系统代理（Windows 读注册表、
+# macOS 读系统设置），代理豁免名单没含 127.0.0.1 时探活会被转给代理——本地服务
+# 明明活着却判「未运行」（--status 删 serve.json、start 重复起服务）。
+_PROBE = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def probe(base: str, timeout: float = 1.5) -> bool:
     try:
-        with urllib.request.urlopen(base + "healthz", timeout=timeout) as r:
+        with _PROBE.open(base + "healthz", timeout=timeout) as r:
             return r.status == 200
     except Exception:
         return False
@@ -243,8 +297,8 @@ def start(work: Path, idle_timeout: int) -> tuple[str, bool, object]:
     spath = work / SERVE_FILE
     old = _read_json(spath) if spath.is_file() else None
     if old and old.get("work") == str(work):
-        base = f"http://127.0.0.1:{old['port']}/{old['token']}/"
-        if _pid_alive(old.get("pid", 0)) and probe(base):
+        base = _serve_url(old)
+        if base and _pid_alive(old.get("pid", 0)) and probe(base):
             return base, False, None
     token = secrets.token_hex(8)
     state = {"last": time.time(), "started": time.strftime("%Y-%m-%d %H:%M")}
@@ -280,9 +334,9 @@ def idle_watchdog(srv: ThreadingHTTPServer, state: dict, idle_timeout: int, spat
 def do_status(work: Path) -> int:
     work = work.resolve()
     old = _read_json(work / SERVE_FILE) if (work / SERVE_FILE).is_file() else None
-    if old and old.get("work") == str(work) \
-            and _pid_alive(old.get("pid", 0)) and probe(f"http://127.0.0.1:{old['port']}/{old['token']}/"):
-        print(f"[评审台服务运行中] http://127.0.0.1:{old['port']}/{old['token']}/")
+    base = _serve_url(old) if old and old.get("work") == str(work) else ""
+    if base and _pid_alive(old.get("pid", 0)) and probe(base):
+        print(f"[评审台服务运行中] {base}")
         return 0
     (work / SERVE_FILE).unlink(missing_ok=True)
     print("[评审台服务未运行]")
@@ -297,18 +351,33 @@ def do_stop(work: Path) -> int:
         (work / SERVE_FILE).unlink(missing_ok=True)
         return 0
     pid = old.get("pid", 0)
-    if _pid_alive(pid):
+    base = _serve_url(old)
+    if _pid_alive(pid) and not (base and probe(base)):
+        # 进程号还在，但不是评审台在应答：残留记录的 pid 被别的程序复用了（Windows
+        # 进程号回收很快）或服务已卡死。结束进程不可撤销，身份没验实就不动它。
+        print(f"[评审台服务未停止] 记录的进程 pid={pid} 仍在，但不回应评审台探活——"
+              "多半是该进程号已被其他程序占用，未强制结束（防误杀）。残留记录已清理；"
+              "评审台服务若仍在运行，会在空闲超时后自行退出")
+    elif _pid_alive(pid):
         try:
-            os.kill(pid, signal.SIGTERM)
-            for _ in range(20):
-                if not _pid_alive(pid):
-                    break
-                time.sleep(0.1)
-            else:
-                os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGTERM)  # Windows 下是强制结束（无 SIGTERM 投递），记录由本命令清
+        except OSError:
             pass
-        print(f"[评审台服务已停止] pid={pid}")
+        for _ in range(20):
+            if not _pid_alive(pid):
+                break
+            time.sleep(0.1)
+        else:
+            sigkill = getattr(signal, "SIGKILL", None)  # Windows 无 SIGKILL
+            if sigkill is not None:
+                try:
+                    os.kill(pid, sigkill)
+                except OSError:
+                    pass
+        if _pid_alive(pid):
+            print(f"[评审台服务未停止] pid={pid}（权限不足或进程无响应，请手动结束）")
+        else:
+            print(f"[评审台服务已停止] pid={pid}")
     else:
         print("[评审台服务未运行]（清理残留记录）")
     (work / SERVE_FILE).unlink(missing_ok=True)

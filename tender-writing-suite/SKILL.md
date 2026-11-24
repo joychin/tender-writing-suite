@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Check this tender document for disqualification risks"
   - "What materials do I need to prepare for this bid?"
-version: 2.2.0
+version: 2.2.3
 author: 灵燕智能
 ---
 
@@ -47,6 +47,11 @@ tender-review（评审台）、tender-docx（合册交付）——发布为单�
    「自动跑完」；评审台未首建禁建节，写作进度面板未首开禁写第一节（首开=
    第五步第一动作跑 `build_review.py --open-progress` 并把面板链接发给用户），
    承诺卡未呈现（G4/G5 合并门）禁落承诺数字。跨技能交接同样过门：载入下一环节技能不构成连跑授权。
+8. **招标格式件只拷不改**：招标文件给了格式的表与函件（目录来源标注挂 TPL 的节）
+   一律 `copy-from` 拷原件、只往空格里填——行列、合并格、标签文字一个不动；嫌版面
+   难看（窄列折行、长值撑高行）也不调不重排，加 Word 批注请用户手动处理。擅自改
+   格式=废标级：`check_writing` 与合册都会拿节内表格比对原件，对不上即拦；只有
+   用户在对话里明确同意才放行（`--allow-format-change "<节名>"`）。
 
 ## 步序与停轮
 
@@ -66,7 +71,7 @@ tender-review（评审台）、tender-docx（合册交付）——发布为单�
 | 第三步 目录树 | tender-analysis | 响应文件分解 + 目录初稿 + 三道清理 | G3 |
 | 第四步 写作准备 | tender-writing | 指引与承诺一次成形（两 tab 只读，给值走对话） | G4 / G5（一次停轮） |
 | 第五步 逐节生成 | tender-writing | **首开进度面板后**按模式路由写节（未 `--open-progress` 首开即写被工具硬拦） | — |
-| 第六步 全局校验 | tender-writing | 承诺对账 + 查重 + 残留扫描；跑完**直接进第七步合册**（不问「合册还是先补齐」） | G6 |
+| 第六步 全局校验 | tender-writing | 承诺对账 + 查重 + 残留扫描 + 招标格式件表格比对；跑完**直接进第七步合册**（不问「合册还是先补齐」；红线 8 的格式件比对不过须先修复） | G6 |
 | 第七步 合册整本 | tender-docx | 自动编号 + 目录实测页码 | — |
 | 确认面构建与服务 | tender-review | 分析报告 / 评审台 / 写作进度三页面 | 各门交付 |
 
@@ -121,6 +126,9 @@ work/
 ```bash
 pip install python-docx pypdfium2 docxcompose Pillow
 ```
+
+Windows 上解释器命令通常是 `python`（`python3` 常是微软商店的占位程序），装依赖写作
+`python -m pip install …`；LibreOffice 装在默认位置即可，脚本自动识别。
 
 python-docx ≥1.0；EMF/WMF 矢量图拷不进（工具告警跳过），需图处先 `render-page`
 转 PNG 再 `image` 插入。版式模板在 `tender-docx/templates/base-template.docx`
