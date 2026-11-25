@@ -13,7 +13,7 @@ examples_en:
   - "Assemble all sections into the final volume with TOC page numbers"
   - "Export a PDF preview after assembly"
   - "Check pending comments before delivery"
-version: 2.2.3
+version: 2.2.4
 author: 灵燕智能
 ---
 
@@ -34,6 +34,7 @@ G6 条）。
 ```bash
 python3 tender-docx/scripts/docx_toolkit.py assemble --work work --numbering chapter
 python3 tender-docx/scripts/docx_toolkit.py toc-pages "work/body/整本-投标文件.docx" --pdf work/导出/预览.pdf --map work/pagemap.json
+python3 tender-docx/scripts/docx_toolkit.py inspect --work work     # 整本检查（只读）：页码回填后跑，结果随收尾汇报交给用户
 ```
 
 `--numbering` 方案见 `--help`；`--toc-depth` 控制目录层级（默认 3 级，静态条目
@@ -72,6 +73,29 @@ Heading 1-3，缺则回落内置样式并点名）。需重建模板时跑
   `image-rotate --docx <file> --index N --deg 90|180|270` 就地旋转（自动按新
   比例重算引用处 extent，不会拉伸变形）。
 
+## 文档检查（只读）
+
+检查只负责发现：不改任何文件、不拦流程。输出是一行结论加一张表（位置、问题、依据、
+确定还是疑似），用户要求修订时才动文件。
+
+```bash
+python3 tender-docx/scripts/docx_toolkit.py inspect --work work                  # 整本检查：整本自身 + 整本与节文件的对账
+python3 tender-docx/scripts/docx_toolkit.py inspect "标书.docx" "报价表.docx" --json work/review/inspect-result.json
+                                                                                # 单独检查一份或几份 Word（多份时各处写的总价互相对账）
+```
+
+- **金额验算**：单价 × 数量 = 合价、合计 = 明细之和（多级小计逐级）、大写 = 小写、
+  各处总价一致、税额 = 金额 × 税率；读不出的格、空着的格、认出是报价表却没有一行能
+  验算的都会点名——不声不响地没查比误报更危险。
+- **其余各项**：内部对账编号外泄、没替换的占位写法与贴入位、表格超出可用宽度／窄列／
+  固定行高、图片拉伸／超宽／损坏、行距比字小、域报错、未接受的修订、文档属性里的
+  工具痕迹、看不见的批注残留。
+- **整本对账**（`--work`）：节文件比整本新（整本没重新生成）、整本被手工改过（重新
+  生成会覆盖）、批注数与各节之和对不上。
+- **读表**：确定的排前面，疑似（列宽折行、分辨率这类靠估算的）要人看一眼；同类版式
+  问题在同一份文件里满 3 处并成一行（逐处位置在 `--json` 结果里）；「未发现」只对
+  最后一行写的已检查范围成立。属于招标格式件的版式问题表不能改，提示用户手动处理。
+
 ## 人工修改与回流
 
 节文件、写作指引、关键事实与承诺、目录树都是**普通文件**，可任意编辑器直改；
@@ -92,6 +116,8 @@ Heading 1-3，缺则回落内置样式并点名）。需重建模板时跑
   文件）——**对话口径=整本 Word 文档，不说「合册」**（reply-style 硬规则 9）；
 - **待办批注逐条点名**（缺什么/要用户定什么）；素材异议点名（节名 + 不符点 +
   建议）；图示计划 vs 实际产出对账；
+- **文档检查表**：把 `inspect --work` 的表原样贴给用户（金额、版式、批注对账这几类），
+  说明本次只读、未改文件，请用户定哪些要修——用户说修才回节文件改、重新生成整本；
 - **沉淀建议**（口径见 @tender-writing-suite/references/reply-style.md，只列
   清单不擅动库）；
 - **导出提醒（必报）**：交付 PDF 用 Word/WPS 导出（目录域自动刷新）；
@@ -102,5 +128,6 @@ Heading 1-3，缺则回落内置样式并点名）。需重建模板时跑
 
 ## 链尾
 
-交付完成，无下一环。用户提出改正文 → 回 tender-writing 写作环节改节文件后
-重新合册。
+交付完成，无下一环。用户提出改正文，或要求修订文档检查表里的某处 → 回
+tender-writing 写作环节改节文件后重新合册（招标格式件的版式问题除外：表不能改，
+提示用户手动处理）。

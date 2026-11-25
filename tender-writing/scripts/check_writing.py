@@ -9,6 +9,10 @@
     python3 check_writing.py [--old-names "a,b"]     全局：承诺比对 + 节间查重 + 占位清点 + 残留
                                                      + 格式件保真（红线：挂 TPL 的节表格须同原件）
 
+单节自查与全局校验后面跟一段**文档检查**（金额验算、表格版式、图片、内部对账编号等，
+引擎在 docx_toolkit.inspect_docx）：只出文字结论 + 一张表，不改变退出码——检查只负责发现，
+拦不拦是红线的事；用户要求修订才动文件。
+
 本模块同时是共用纯函数的落点（build_review / apply_review / build_dispatch 从这里
 import，依赖方向恒为 上游→本模块，禁止反向）：table_rows / _read / _resolve_source /
 _split_tables / _registry_payload / _parse_annotations / ID_RE / LNUM_RE。
@@ -33,7 +37,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 # 本段是发货源码：打包器不再装配时替换——本地电池测到的就是发货版。
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 _STAGE_ROOT = _SCRIPTS_DIR.parent
-_SENTINEL = {"tender-docx": "docx_toolkit.py", "tender-writing": "check_writing.py"}
+# tender-review 这一项给 _stage_gate 的指路话用（缺了它，「面板未首开」的提示语自己会抛
+# KeyError——闸拦住了，路没指）
+_SENTINEL = {"tender-docx": "docx_toolkit.py", "tender-writing": "check_writing.py",
+             "tender-review": "build_review.py"}
 
 
 def _sibling_scripts(name: str) -> Path:
@@ -51,8 +58,8 @@ def _sibling_scripts(name: str) -> Path:
 _DOCX_SCRIPTS = _sibling_scripts("tender-docx")
 sys.path.append(str(_DOCX_SCRIPTS))
 from docx_toolkit import (  # noqa: E402
-    allow_format_set, build_tree, cell_text_full, format_fidelity, iter_blocks, para_text_full,
-    parse_outline, require_docx, sanitize_name,
+    allow_format_set, build_tree, cell_text_full, format_fidelity, format_findings, inspect_docx,
+    inspect_files, iter_blocks, para_text_full, parse_outline, require_docx, sanitize_name,
 )
 
 # python-docx 惰性加载：顶层 import 会让未装依赖的环境（沙箱评测、纯净解释器）
@@ -778,6 +785,19 @@ def check_section(work: Path, section: Path, allow: set[str] | None = None) -> t
 
 # ---------------------------------------------------------------- 全局
 
+def _section_files(work: Path) -> list[Path]:
+    """参与校验的节文件（单册在 body/ 根、多册在 body/<册名>/）。
+    ~$节.docx / .~节.docx 是 Word/WPS 打开节文件时落的占用锁文件（隐藏）：不是 zip，
+    当节文件读会直接抛 PackageNotFoundError 拖垮整次全局校验；整本-*.docx 是合册产物。"""
+    body_dir = Path(work) / "body"
+    if not body_dir.is_dir():
+        return []
+    return sorted(
+        p for p in list(body_dir.glob("*.docx")) + list(body_dir.rglob("*/*.docx"))
+        if not p.name.startswith(("整本-", "~$", ".~"))
+    )
+
+
 def deviation_gaps(gdocs: dict, work: Path) -> list[str]:
     """偏离表完整性（warning 级，报告不是门）：响应列空行点名 + 与 REQ 登记条数对账。
 
@@ -829,12 +849,7 @@ def check_global(work: Path, old_names: list[str], allow: set[str] | None = None
     body_dir = work / "body"
     if not body_dir.is_dir():
         return ["work/body/ 不存在"], warnings
-    # ~$节.docx / .~节.docx 是 Word/WPS 打开节文件时落的占用锁文件（隐藏）：不是 zip，
-    # 当节文件读会直接抛 PackageNotFoundError 拖垮整次全局校验
-    sections = sorted(
-        p for p in list(body_dir.glob("*.docx")) + list(body_dir.rglob("*/*.docx"))
-        if not p.name.startswith(("整本-", "~$", ".~"))
-    )
+    sections = _section_files(work)
     if not sections:
         warnings.append("work/body/ 下没有节文件")
 
@@ -1050,6 +1065,24 @@ def main() -> None:
                           if l.strip()]
         issues, warnings = check_global(work, old_names, allow)
 
+    # 文档检查（只读、不阻断）：单节查这一节，全局查全部节文件（各节写的总价放在一起对账）。
+    # 【待补】类占位已是上面的红线问题，这里不重复列；节文件的文档属性不看（交付的是整本，
+    # 整本的属性在生成时已清，整本对账走 docx_toolkit inspect --work）。检查自身出错只告警。
+    scope: dict = {}
+    findings: list[dict] = []
+    n_files = 0
+    if args.section or not (args.guide or args.analysis or args.outline):
+        try:
+            if args.section:
+                n_files = 1
+                findings = inspect_docx(Path(args.section), core_placeholders=False, props=False, scope=scope)
+            else:
+                secs = _section_files(work)
+                n_files = len(secs)
+                findings = inspect_files(secs, core_placeholders=False, props=False, scope=scope) if secs else []
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"文档检查未能执行（{type(exc).__name__}），金额与版式请人工核对")
+
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1058,15 +1091,20 @@ def main() -> None:
             "mode": ("guide" if args.guide else "section" if args.section
                      else "analysis" if args.analysis else "outline" if args.outline
                      else "global"),
-            "issues": issues, "warnings": warnings,
+            "issues": issues, "warnings": warnings, "findings": findings,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[结果已落盘] {out}")
 
     is_global = not (args.guide or args.section or args.analysis or args.outline)
     for w in warnings:
         print(f"⚠️ {w}")
+    if findings:
+        # 表格直接可转述给用户（位置／问题／依据／确定还是疑似），定位行供修订时取坐标
+        print()
+        print(format_findings(findings, n_files, scope))
     if not issues:
-        print("[校验通过] 全部合规")
+        print(f"[校验通过] 红线与承诺校验无问题；文档检查查出 {len(findings)} 处，见上表"
+              "（不阻断流程，随收尾汇报交给用户处置）" if findings else "[校验通过] 全部合规")
         if is_global:
             print(_G6_DIRECTIVE)
         sys.exit(0)

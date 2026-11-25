@@ -31,12 +31,14 @@
 python3 listing/self_check.py        # 改动技能包后必跑：frontmatter 必填与规格/YAML/逐技能 token 闸/空目录/
                                      #   同技能与跨技能引用存在性/产品专属词/沿革从句/五包版本一致/
                                      #   缺依赖冒烟/模板中文字体/CHANGELOG 顶行
-python3 tests/engine_smoke.py        # 引擎回归电池 E01–E40（内容保真/批注与编号/跨平台与发版闸/真机复盘/Windows 兼容/
-                                     #   格式件保真红线）；
+python3 tests/engine_smoke.py        # 引擎回归电池 E01–E54（内容保真/批注与编号/跨平台与发版闸/真机复盘/Windows 兼容/
+                                     #   格式件保真红线/文档检查）；
                                      #   改 docx_toolkit 前先补失败用例；E24/E29/E34 靠 LibreOffice，缺了记失败不跳过
 python3 tests/review_smoke.py        # 评审台服务生命周期电池 R01–R09（零第三方依赖，跨平台）；
                                      #   动 serve_review 的探活/关停前先补失败用例
 python3 tender-docx/scripts/make_template.py   # 改 docx_toolkit 的 setup_styles 后重生成 base-template.docx
+python3 tender-docx/scripts/docx_toolkit.py inspect --work work   # 文档检查（只读）：整本自身 + 与节文件的对账；
+                                     #   也可直接给一份或几份 docx；改检查逻辑前先在本机真实工作区回放找漏报误报
 python3 testruns/fp_smoke.py         # 评审台产物指纹链路冒烟（A1–A8；本机专属，见 testruns 一条）
 python3 testruns/fp_e2e_cli.py       # 评审台 CLI 级全面断言（B1–B8，含 fp_smoke 12 例复跑；本机专属）
 python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-writing-suite-<version>.zip（唯一单包）
@@ -81,6 +83,17 @@ python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-wri
   存在；`check_writing --section`／全局校验与 `assemble` 三道共用，`--allow-format-change`
   只在用户对话明确同意后使用。**触发只认目录「来源标注」**——指引依据列是模型写的，
   错挂 TPL 会把无关的节拖进来误报。动它之前先看 `tests/engine_smoke.py`（E40）。
+- **文档检查只读不拦**（`docx_toolkit inspect`；`check_writing` 的单节自查与全局校验
+  后面跟同一段，不改变退出码）：结果 = 一行结论 + 一张表（位置／问题／依据／确定还是
+  疑似）+ 定位行 + 已检查范围，用户要求修订才动文件。检查自身出错只产出一条「没能
+  执行」的疑似发现；读不出的金额格、认出是报价表却没有一行能验算成的必须点名——最
+  危险的失败不是误报，是不声不响地没查。三条写盘约定：①引擎写整本一律走
+  `_save_doc()`（内部调 `write_fingerprint()`，指纹记在 `<整本名>.docx.fingerprint.json`），
+  新增写整本的代码不许绕开，否则「整本被手工改过」会误报；②`base_document()` 起建
+  即清文档属性（作者／最后修改者／备注），别在别处再写作者；③`inspect` 任何情况下
+  不落盘。阈值是拿本机真实工作区回放标定的（图片 72 DPI、拉伸 5%、图与表超宽容差
+  0.5 厘米、窄列须有 4 字以上实际内容、`image` 按页宽减左右边距插图），改之前先回放。
+  动它之前先看 `tests/engine_smoke.py`（E41–E54）。
 - **环节间共享模块三形态解析**：脚本用 `_sibling_scripts()` 按
   扁平(上架包) → 平级 `../<环节>` → `stages/<环节>` 顺序找兄弟环节 `scripts/`
   （现由 `build_dispatch`/`check_writing`/`build_review`/`apply_review` 四脚本使用）。

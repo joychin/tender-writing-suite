@@ -13,7 +13,7 @@ examples_en:
   - "The outline is approved — start writing the sections"
   - "Continue with the next technical section"
   - "Run the global validation on commitments and duplication"
-version: 2.2.3
+version: 2.2.4
 author: 灵燕智能
 ---
 
@@ -84,12 +84,17 @@ table 块，不流水句铺）。每节写完跑 `check_writing.py --section "<�
 
 ```bash
 python3 scripts/check_writing.py            # 承诺比对 + 节间查重 + 残留扫描 + 招标格式件表格比对
+                                            # 后面跟文档检查（金额验算、表格版式等）：只列表，不改变校验结论
 python3 scripts/check_writing.py --old-names "旧公司名,旧项目名"   # 素材改写后必查残留
 python3 scripts/check_writing.py --json work/review/check-result.json   # 落盘供进度面板读，收尾必带
 ```
 
 - **旧名残留必须清零**（行业第一大事故）：`--old-names` 把用户提过的旧机构名
   都传进去（素材来源项目的招标方、我方曾用名等），别只靠素材文件名兜底。
+- **文档检查表随收尾交给用户**：单节自查与全局校验后面跟一段文档检查（单价 × 数量
+  是否等于合价、合计对不对、大小写是否一致、各处总价是否一致、表格与图片版式、
+  内部对账编号外泄等），不改变校验结论；那张表随收尾汇报原样贴给用户，用户说修
+  才动文件。
 
 ## 链尾 HARD-GATE
 

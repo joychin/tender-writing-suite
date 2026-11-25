@@ -37,6 +37,23 @@ E39 带 BOM 的 txt/md 首行标题不丢
 
 第 6 批 格式件保真（红线）
 E40 招标格式件表格只拷不改（重排被拦 / 保真不误报 / 合册拒绝 / --allow-format-change 放行）
+
+第 7 批 文档检查（只读；结果=文字结论+表，检查自身不拦流程）
+E41 金额行验算/列验算（单价×数量、合计=明细之和、多级小计）
+E42 大写小写一致 + 跨表总价一致（同格/表尾合并行两种真实形态）
+E43 口径换算不误报（万元写法、带量词数量、单位后缀）
+E44 读不出/空着/零负数/税额 + 「没验算成」兜底
+E45 内部对账编号外泄 + 占位写法
+E46 表格超宽 / 列太窄 / 固定行高裁字
+E47 图片拉伸 / 超宽 / 损坏 / 低分辨率
+E48 行距压字 / 域报错 / 未接受的修订
+E49 文档属性里的工具痕迹（点名 + 工具建节与合册时不带）
+E50 check_writing 接入（非阻断、落 JSON、红线照旧拦）
+E51 整本对账（整本比节文件旧 / 被手工改过 / 批注数对不上）
+E52 inspect 命令行（只读、结论先行、已检查范围、缺文件、GBK）
+E53 真实工作区回放后的校准（之江「叁」／项目总价整行合并／金额整列空着／报价没填／
+    人员数量区间／只有表头的窄列／图片阈值／同类并成一行／节文件不看文档属性）
+E54 写节闸的指路话（进度面板未首开时给命令，不抛报错栈）
 """
 import io
 import json
@@ -1082,6 +1099,580 @@ def e40():
           code == 1 and "招标格式件" in out, f"exit={code} out={out[:300]}")
 
 
+# ---------------------------------------------------------------- 第 7 批 文档检查（只读）
+
+TABLE_HEAD = "| 位置 | 问题 | 依据 | 确定/疑似 |"
+
+
+def ins(*a, env=None):
+    """跑 docx_toolkit inspect 命令行（只读），返回 (退出码, 合并输出)。"""
+    return tk("inspect", *a, env=env)
+
+
+def _doc():
+    """不带 python-docx 作者属性的空白文档——文档属性是 E49 专门验的，别的用例不牵扯。"""
+    d = Document()
+    d.core_properties.author = d.core_properties.last_modified_by = d.core_properties.comments = ""
+    return d
+
+
+def _table(d, header, rows, widths_cm=None):
+    """建一张表（表头 + 数据行）；给了 widths_cm 就固定布局并逐列设宽。"""
+    t = d.add_table(rows=1 + len(rows), cols=len(header))
+    for i, h in enumerate(header):
+        t.cell(0, i).text = h
+    for ri, row in enumerate(rows, 1):
+        for ci, v in enumerate(row):
+            t.cell(ri, ci).text = v
+    if widths_cm:
+        t.autofit = False
+        for ci, w in enumerate(widths_cm):
+            t.columns[ci].width = Cm(w)
+            for cell in t.columns[ci].cells:
+                cell.width = Cm(w)
+    return t
+
+
+QTY_HDR = ["名称", "数量", "单位", "单价（元/万条）", "小计（元）", "备注"]
+GOOD_ROWS = [("标注服务甲", "300", "万条", "12,650.00", "3,795,000.00", "含税，包干价"),
+             ("标注服务乙", "900", "万条", "1,000.00", "900,000.00", "")]
+BAD_ROW = [("标注服务甲", "300", "万条", "12,650.00", "3,795,000.00", ""),
+           ("标注服务乙", "900", "万条", "1,000.00", "800,000.00", "")]
+
+
+def _quote(name, rows, total, header=QTY_HDR):
+    """之江实验室项目「初次报价组成明细表」形态：单价按元/万条计、合计行跨合并格只有金额。"""
+    d = _doc()
+    d.add_heading("初次报价组成明细表", 1)
+    d.add_paragraph("（价格单位：元人民币，含税）")
+    t = _table(d, header, list(rows) + [["合计（以上费用之和）", "", "", "", total, ""]])
+    last = t.rows[-1]
+    last.cells[0].merge(last.cells[3])
+    p = WORK / f"{name}.docx"
+    d.save(str(p))
+    return p
+
+
+def _sheet(name, upper, lower="¥ 3,795,000.00"):
+    """「初次报价一览表」形态：大写小写在同一格。"""
+    d = _doc()
+    d.add_heading("初次报价一览表", 1)
+    d.add_paragraph("（价格单位：元人民币）")
+    _table(d, ["序号", "项目名称", "投标总价（元）"],
+           [["1", "科学数据标注服务", f"小写：{lower}\n大写：{upper}"]])
+    p = WORK / f"{name}.docx"
+    d.save(str(p))
+    return p
+
+
+def _amount_work(name):
+    """带一张算错的报价表的工作区（评审台与进度面板标记齐备，能过写节闸）。"""
+    work, _ = make_work(name, "# 响应文件：投标文件\n## 目录\n- 目录\n- 报价表\n- 技术方案\n",
+                        ["报价表", "技术方案"])
+    sec = work / "body" / "报价表.docx"
+    d = Document(str(sec))
+    _table(d, ["名称", "数量", "单价（元）", "合价（元）"], [["设备甲", "2", "100.00", "150.00"]])
+    d.save(str(sec))
+    return work, sec
+
+
+def e41():
+    """金额：单价×数量≠合价、合计行≠明细之和被点名并带算式与格坐标；多级小计逐级验；对得上的零发现。"""
+    code, out = ins(_quote("报价-行错", BAD_ROW, "4,595,000.00"))
+    check("E41a 单价×数量≠合价被点名（带算式与格坐标，合计没错就不提合计）",
+          code == 0 and "单价 × 数量 ≠ 合价" in out and "1,000.00 × 900 = 900,000.00" in out
+          and "表里写的是 800,000.00" in out and "T1R3C5" in out and "明细之和" not in out,
+          f"exit={code} out={out[:500]}")
+    check("E41a' 表格四列齐（位置/问题/依据/确定还是疑似），行验算算确定",
+          TABLE_HEAD in out and out.count("| 确定 |") == 1, out[:500])
+    code, out = ins(_quote("报价-列错", GOOD_ROWS, "4,700,000.00"))
+    check("E41b 合计行≠明细之和被点名（两个数与差额都写出来）",
+          "合计行 ≠ 明细之和" in out and "4,700,000.00" in out and "4,695,000.00" in out
+          and "差 5,000.00" in out and "单价 × 数量" not in out, out[:500])
+    code, out = ins(_quote("报价-对", GOOD_ROWS, "4,695,000.00"))
+    check("E41c 算术全对的报价表零发现（阴性对照）", "未发现问题" in out, out[:400])
+    lv = [["设备甲", "1", "100.00", "100.00"], ["设备乙", "1", "200.00", "200.00"], ["小计", "", "", "300.00"],
+          ["服务丙", "1", "50.00", "50.00"], ["服务丁", "1", "50.00", "50.00"], ["小计", "", "", "100.00"],
+          ["合计", "", "", "400.00"]]
+    hdr = ["名称", "数量", "单价（元）", "合价（元）"]
+
+    def multi(total):
+        d = _doc()
+        d.add_heading("分项报价表", 1)
+        _table(d, hdr, lv[:-1] + [["合计", "", "", total]])
+        p = WORK / f"分项-{total}.docx"
+        d.save(str(p))
+        return p
+    code, out = ins(multi("400.00"))
+    check("E41d 多级小计与合计都对得上 → 零发现", "未发现问题" in out, out[:400])
+    code, out = ins(multi("450.00"))
+    check("E41e 合计错了只点合计、不点小计", out.count("≠ 明细之和") == 1 and "小计行" not in out, out[:500])
+
+
+def e42():
+    """大写小写一致、跨表总价一致——同格（之江实验室项目真实数字，大写带「叁」）与表尾合并行
+    （qszbh260186 项目）两种真实形态。"""
+    detail = _quote("明细-之江", [("科学数据标注服务（数学）", "300", "万条", "12,650.00", "3,795,000.00", "含税，包干价")],
+                    "3,795,000.00")
+    code, out = ins(_sheet("一览-之江", "人民币叁佰柒拾玖万伍仟元整"), detail)
+    check("E42a 大写小写同格且一致、跨表总价一致 → 零发现", "未发现问题" in out, out[:500])
+    code, out = ins(_sheet("一览-大写错", "人民币肆佰万零壹仟元整"), detail)
+    check("E42b 大写与小写不一致被点名（两个数都写出来）",
+          "大写与小写不一致" in out and "4,001,000" in out and "3,795,000.00" in out, out[:500])
+    code, out = ins(_sheet("一览-总价错", "人民币叁佰柒拾玖万伍仟捌佰元整", "¥ 3,795,800.00"), detail)
+    check("E42c 两张表的总价不一致被点名（一览表与明细表各是多少）",
+          "各处写的总价不一致" in out and "3,795,800.00" in out and "3,795,000.00" in out
+          and "大写与小写不一致" not in out, out[:600])
+    d = _doc()
+    d.add_heading("初次报价一览表", 1)
+    t = _table(d, ["序号", "标的名称", "规格型号（或具体服务）", "数量", "单价（元）", "合计（元）"],
+               [["1", "公式标注", "最终有效公式", "30万", "2.2", "660000"]])
+    cells = t.add_row().cells
+    cells[0].merge(cells[5]).text = "响应报价（计价单位：人民币元） 小写：660000 元 大写：陆拾陆万元整"
+    d.add_paragraph("说明：响应报价仅作为价格分评审依据。")
+    p = WORK / "一览-qszbh.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E42d 数量带「万」、小写带单位、表尾合并行里大小写同行 → 零发现", "未发现问题" in out, out[:500])
+
+
+def e43():
+    """口径：万元写法、数量带单位、金额带括注都不误报。"""
+    detail = _quote("明细-口径", [("科学数据标注服务（数学）", "300", "万条", "12,650.00", "3,795,000.00", "")],
+                    "3,795,000.00")
+    code, out = ins(_sheet("一览-万元", "人民币叁佰柒拾玖万伍仟元整", "379.5 万元"), detail)
+    check("E43a 小写写成「379.5 万元」与明细表合计对得上 → 零发现", "未发现问题" in out, out[:500])
+    d = _doc()
+    d.add_heading("单价表", 1)
+    _table(d, ["名称", "数量", "单价", "合计"], [["公式标注", "30万条", "2.2元/条", "660,000.00"],
+                                              ["校验标注", "1 批", "1,000 元", "1,000.00（含税）"]])
+    p = WORK / "口径-单位.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E43b 数量带单位、单价带单位、金额带括注 → 行验算照常做且零发现", "未发现问题" in out, out[:500])
+
+
+def e44():
+    """兜底：读不出、空着、零与负数、税额都要点名；认出是报价表却一行都没验算成也要点名。"""
+    d = _doc()
+    d.add_heading("报价表", 1)
+    _table(d, QTY_HDR, [["服务甲", "1", "批", "100.00", "面议", ""],
+                        ["服务乙", "1", "批", "", "100.00", ""]])
+    p = WORK / "兜底-读不出.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E44a 合价格写成「面议」→ 点名读不出", "金额读不出来" in out and "面议" in out, out[:500])
+    check("E44b 单价格空着 → 点名空着", "单价空着" in out, out[:500])
+    d = _doc()
+    d.add_heading("报价表", 1)
+    _table(d, QTY_HDR, [["服务甲", "1", "批", "0", "0", ""], ["服务乙", "1", "批", "-100.00", "-100.00", ""]])
+    p = WORK / "兜底-零负.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E44c 单价为 0、为负 → 点名", "为 0 或负数" in out and out.count("为 0 或负数") == 2, out[:500])
+    d = _doc()
+    d.add_heading("报价表", 1)
+    _table(d, ["名称", "数量", "单价", "合计"], [["服务甲", "壹批", "拾元", "拾元"]])
+    p = WORK / "兜底-没验算.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E44d 表头像报价表、却一行都没验算成 → 点名（不静默跳过）",
+          "没有一行能验算" in out, out[:500])
+    tax = ["名称", "金额（元）", "税率", "税额（元）", "价税合计（元）"]
+
+    def taxed(rows):
+        d = _doc()
+        d.add_heading("含税报价表", 1)
+        _table(d, tax, rows)
+        p = WORK / f"税-{len(rows)}-{abs(hash(tuple(map(tuple, rows)))) % 997}.docx"
+        d.save(str(p))
+        return p
+    code, out = ins(taxed([["甲", "1,000.00", "13%", "130.00", "1,130.00"],
+                           ["乙", "333.33", "13%", "43.33", "376.66"]]))
+    check("E44e 税额与价税合计都对得上（含四舍五入到分）→ 零发现", "未发现问题" in out, out[:500])
+    code, out = ins(taxed([["甲", "1,000.00", "13%", "150.00", "1,150.00"],
+                           ["乙", "1,000.00", "13%", "130.00", "1,200.00"]]))
+    check("E44f 税额≠金额×税率、价税合计≠金额+税额 各点一处",
+          "税额与金额 × 税率对不上" in out and "价税合计 ≠ 金额 + 税额" in out
+          and "130.00" in out and "1,130.00" in out, out[:600])
+
+
+def e45():
+    """内部对账编号不进正文；贴入位与其他占位写法点名；正常的条款引用不误报。"""
+    d = _doc()
+    d.add_heading("技术方案", 1)
+    d.add_paragraph("本章响应 REQ-03 与 SCORE-12 的要求。")
+    d.add_paragraph("详见第三章 2.3 条。")
+    d.add_paragraph("（此处贴入：营业执照复印件，加盖公章）")
+    d.add_paragraph("投标人：×××")
+    d.add_paragraph("联系电话：此处填写")
+    p = WORK / "编号与占位.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E45a 正文里的内部对账编号被点名（两个都点到）",
+          "内部对账编号" in out and "REQ-03" in out and "SCORE-12" in out, out[:600])
+    check("E45b 「详见第三章 2.3 条」不误报", "第三章" not in out, out[:600])
+    check("E45c 贴入位还在、×××、此处填写 各点一处",
+          "贴入位还在" in out and "×××" in out and "此处填写" in out, out[:600])
+
+
+def e46():
+    """表格几何：超宽、列太窄、固定行高裁字；正常的表不误报。"""
+    def tbl(name, header, rows, widths):
+        d = _doc()
+        d.add_heading("团队配置", 1)
+        _table(d, header, rows, widths)
+        p = WORK / f"{name}.docx"
+        d.save(str(p))
+        return p
+    code, out = ins(tbl("表-超宽", ["岗位", "姓名", "职责", "备注"], [["项目经理", "张三", "负责整体交付", ""]], [5, 5, 5, 5]))
+    check("E46a 表格超出可用宽度被点名（两个宽度都写出来）",
+          "表格超出可用宽度" in out and "20.0 厘米" in out and "15.2 厘米" in out, out[:500])
+    code, out = ins(tbl("表-正常", ["岗位", "姓名", "职责", "备注"], [["项目经理", "张三", "负责整体交付", ""]], [3, 3, 6, 3]))
+    check("E46b 宽度合适的表零发现", "未发现问题" in out, out[:400])
+    code, out = ins(tbl("表-窄列", ["联系电话", "联系人", "备注"], [["13800000000", "张三", ""]], [0.6, 6, 6]))
+    check("E46c 列太窄被点名（按列点一次、带列头名）",
+          "一字一行" in out and "联系电话" in out and out.count("一字一行") == 1 and "| 疑似 |" in out, out[:500])
+    clip = WORK / "表-裁字.docx"
+    d = _doc()
+    d.add_heading("说明", 1)
+    t = _table(d, ["项目", "内容"], [["概述", "这是一段需要两行才能放下的说明文字，用来验证固定行高裁字。"]], [3, 9])
+    trPr = t.rows[1]._tr.get_or_add_trPr()
+    h = OxmlElement("w:trHeight")
+    h.set(qn("w:val"), "200")
+    h.set(qn("w:hRule"), "exact")
+    trPr.append(h)
+    d.save(str(clip))
+    code, out = ins(clip)
+    check("E46d 固定行高小于一行字被点名（行高与字号都写出来）", "固定行高" in out and "10 磅" in out, out[:500])
+
+
+def e47():
+    """图片：拉伸变形、超出可用宽度、打不开、分辨率偏低；等比不超宽的图零发现。"""
+    from PIL import Image
+    img = WORK / "pic.png"
+    Image.new("RGB", (400, 200), "blue").save(img)
+
+    def pic(name, source=img, **kw):
+        d = _doc()
+        d.add_heading("架构图", 1)
+        d.add_paragraph("系统总体架构如下图所示：")
+        d.add_picture(str(source), **kw)
+        p = WORK / f"{name}.docx"
+        d.save(str(p))
+        return p
+    code, out = ins(pic("图-拉伸", width=Cm(10), height=Cm(10)))
+    check("E47a 图片拉伸变形被点名（原像素与页面尺寸）",
+          "拉伸变形" in out and "400×200" in out and "10.0×10.0" in out, out[:500])
+    code, out = ins(pic("图-超宽", width=Cm(20)))
+    check("E47b 图片超出可用宽度被点名", "图片超出可用宽度" in out, out[:500])
+    code, out = ins(pic("图-正常", width=Cm(8)))
+    check("E47c 等比、不超宽、分辨率够的图零发现", "未发现问题" in out, out[:400])
+    broken = pic("图-损坏", width=Cm(8))
+    tmp = broken.with_suffix(".tmp")
+    with zipfile.ZipFile(broken) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            zout.writestr(item, b"not an image" if item.filename.startswith("word/media/") else data)
+    tmp.replace(broken)
+    code, out = ins(broken)
+    check("E47d 图片字节损坏被点名", "图片打不开" in out, out[:400])
+    tiny = WORK / "tiny.png"
+    Image.new("RGB", (60, 30), "white").save(tiny)
+    code, out = ins(pic("图-模糊", source=tiny, width=Cm(8)))
+    check("E47e 有效分辨率不足 100 DPI 被点名（疑似）", "分辨率偏低" in out and "| 疑似 |" in out, out[:500])
+
+
+def e48():
+    """行距比字小、域报错文字、未接受的修订；空段的定行高不误报。"""
+    p = WORK / "版式.docx"
+    d = _doc()
+    d.add_heading("实施方案", 1)
+    q = d.add_paragraph()
+    q.add_run("这一段的字号比固定行距大，文字会被压掉。").font.size = Pt(14)
+    q.paragraph_format.line_spacing = Pt(10)
+    d.add_paragraph("详见下表（错误!未找到引用源）。")
+    tracked(d.add_paragraph(), "本项目团队共 ", "十二", "三", " 人。")
+    d.add_paragraph("").paragraph_format.line_spacing = Pt(2)
+    d.save(str(p))
+    code, out = ins(p)
+    check("E48a 行距比字小被点名（两个磅值都写出来）", "行距比字小" in out and "10 磅" in out and "14 磅" in out, out[:500])
+    check("E48b 域报错文字被点名", "域报错" in out and "未找到引用源" in out, out[:500])
+    check("E48c 未接受的修订被点名（插入与删除各几处）", "没接受的修订" in out and "插入 1" in out and "删除 1" in out, out[:500])
+    check("E48d 空段的 2 磅定行高不误报", out.count("行距比字小") == 1, out[:500])
+
+
+def e49():
+    """文档属性：工具痕迹被点名；工具建节与合册产出的文档不带。"""
+    raw = WORK / "属性-原始.docx"
+    Document().save(str(raw))
+    code, out = ins(raw)
+    check("E49a 文档属性里的工具痕迹被点名", "文档属性" in out and "python-docx" in out, out[:500])
+    made = WORK / "属性-工具建的.docx"
+    code, out = tk("create", made, "--title", "技术方案", "--body", body("b-props", [{"text": "正文。"}]))
+    check("E49b 工具建的节不带工具痕迹", code == 0 and "python-docx" not in xml(made, "docProps/core.xml"),
+          xml(made, "docProps/core.xml")[:300])
+    work, _ = make_work("w-props", "# 响应文件：投标文件\n## 目录\n- 目录\n- 甲节\n", ["甲节"])
+    code, out = tk("assemble", "--work", work)
+    book = next((work / "body").glob("整本-*.docx"))
+    code, out2 = ins(book)
+    check("E49c 生成的整本不带工具痕迹", code == 0 and "python-docx" not in xml(book, "docProps/core.xml")
+          and "工具痕迹" not in out2, xml(book, "docProps/core.xml")[-300:] + out2[:200])
+
+
+def e50():
+    """check_writing 接入：文档检查结果跟在自查与全局校验后面、不改变结论；落 JSON；红线照旧拦。"""
+    work, sec = _amount_work("w-ins-cw")
+    res = work / "review" / "check-result.json"
+    code, out = cw("--work", work, "--section", sec, "--json", res)
+    data = json.loads(res.read_text(encoding="utf-8"))
+    check("E50a 单节自查带上文档检查结果但不阻断（结论仍是校验通过、退出码 0）",
+          code == 0 and "[校验通过]" in out and "单价 × 数量 ≠ 合价" in out and "T1R2C4" in out
+          and TABLE_HEAD in out, f"exit={code} out={out[:600]}")
+    got = data.get("findings") or []
+    check("E50b 检查结果落进 JSON（位置/问题/依据/确定还是疑似/坐标齐全）",
+          bool(got) and got[0].get("anchor") == "T1R2C4"
+          and {"level", "where", "what", "basis", "file"} <= set(got[0]), str(data)[:400])
+    code, out = cw("--work", work, "--json", res)
+    check("E50c 全局校验同样带上、退出码仍为 0", code == 0 and "单价 × 数量 ≠ 合价" in out and TABLE_HEAD in out,
+          f"exit={code} out={out[:600]}")
+    d = Document(str(sec))
+    d.add_paragraph("【待补：交付时间】")
+    d.save(str(sec))
+    code, out = cw("--work", work, "--section", sec)
+    check("E50d 原有红线（占位文字）照旧拦，检查结果照常列出",
+          code == 1 and "占位文字" in out and "单价 × 数量 ≠ 合价" in out, f"exit={code} out={out[:600]}")
+    clean = work / "body" / "技术方案.docx"
+    code, out = cw("--work", work, "--section", clean)
+    check("E50e 干净的节不多出检查表", code == 0 and TABLE_HEAD not in out, f"exit={code} out={out[:400]}")
+
+
+def e51():
+    """整本对账：节文件比整本新、整本被手工改过、批注数与各节之和对不上；引擎自己写整本后指纹同步。"""
+    work, sec = _amount_work("w-ins-book")
+    code, out = tk("assemble", "--work", work)
+    book = next((work / "body").glob("整本-*.docx"))
+    code, out = ins("--work", work)
+    check("E51a 刚生成的整本：金额问题照常列出、三项对账无发现",
+          code == 0 and "单价 × 数量 ≠ 合价" in out and "整本比节文件旧" not in out
+          and "手工改过" not in out and "对不上" not in out, f"exit={code} out={out[:600]}")
+    st = sec.stat()
+    later = st.st_mtime + 120
+    os.utime(sec, (later, later))
+    code, out = ins("--work", work)
+    check("E51b 节文件在整本之后改过 → 点名整本没重新生成", "整本比节文件旧" in out and "「报价表」" in out, out[:600])
+    os.utime(sec, (st.st_atime, st.st_mtime))
+    tk("assemble", "--work", work)
+    Document(str(book)).save(str(book))  # 模拟在 Word 里打开后保存
+    code, out = ins("--work", work)
+    check("E51c 整本被手工改过 → 点名（重新生成会覆盖）", "手工改过" in out and "会覆盖" in out, out[:600])
+    code, out = tk("assemble", "--work", work)
+    check("E51d 重新生成时提醒现有整本被手工改过（不拒绝）", code == 0 and "手工改过" in out, f"exit={code} {out[:400]}")
+    code, out = ins("--work", work)
+    check("E51e 引擎自己重新生成后指纹同步、不再误报", "手工改过" not in out, out[:600])
+    tk("comment", sec, "--para", "P1", "--text", "合价待核")
+    code, out = ins("--work", work)
+    check("E51f 各节批注数与整本里的对不上 → 点名（两边各几条）",
+          "批注" in out and "对不上" in out and "各节相加 1 条" in out and "整本里 0 条" in out, out[:700])
+    empty, _ = make_work("w-ins-nobook", "# 响应文件：投标文件\n## 目录\n- 目录\n- 甲节\n", ["甲节"])
+    code, out = ins("--work", empty)
+    check("E51g 还没有整本时说清楚、不报错", code == 0 and "还没有整本" in out, f"exit={code} {out[:300]}")
+    check("E51i 已检查范围里写明整本对账（「未发现」只对已检查范围成立）", "整本对账" in out or "整本对账" in ins("--work", work)[1],
+          ins("--work", work)[1][-260:])
+    Path(str(book) + ".fingerprint.json").unlink()  # 旧版引擎生成的整本没有指纹记录
+    code, out = ins("--work", work)
+    check("E51h 没有指纹记录时说明「整本被手工改过」这一项查不了，表里不出这一行（不假装查过）",
+          code == 0 and "没有指纹记录" in out and "整本指纹对账未做" in out and "| 整本被手工改过" not in out,
+          f"exit={code} {out[-300:]}")
+
+
+def e52():
+    """inspect 命令行：只读（文件字节不变）、结论先行、零发现时交代已检查范围、缺文件一行式、GBK 管道不崩。"""
+    import hashlib
+    p = _quote("命令行-行错", BAD_ROW, "4,595,000.00")
+    before = hashlib.sha256(p.read_bytes()).hexdigest()
+    res = WORK / "inspect-result.json"
+    code, out = ins(p, "--json", res)
+    after = hashlib.sha256(p.read_bytes()).hexdigest()
+    check("E52a 只读：文件字节不变、退出码 0", code == 0 and before == after, f"exit={code}")
+    check("E52b 首行给结论并说明未改文件", "[文档检查]" in out and "未改任何文件" in out and "查出 1 处" in out, out[:400])
+    data = json.loads(res.read_text(encoding="utf-8"))
+    check("E52c --json 落盘结构化结果", isinstance(data.get("findings"), list) and len(data["findings"]) == 1
+          and data["findings"][0]["level"] == "确定", str(data)[:300])
+    code, out = ins(_quote("命令行-对", GOOD_ROWS, "4,695,000.00"))
+    check("E52d 零发现时交代已检查范围", "未发现问题" in out and "已检查" in out and "金额" in out, out[:400])
+    code, out = ins(WORK / "不存在.docx")
+    check("E52e 文件不存在：一行式失败、退出码非 0、无 Traceback", code != 0 and "[失败]" in out and "Traceback" not in out,
+          f"exit={code} {out[:200]}")
+    code, out = ins(p, env=GBK)
+    check("E52f GBK 管道下照常输出（退出码 0，算式里的数字还在）", code == 0 and "900,000.00" in out,
+          f"exit={code} {out[:200]}")
+
+
+def e53():
+    """真实工作区回放后的校准——每种形态都来自本机真实项目（之江实验室、11-07、11-21 的工作区）。
+    合成用例全绿的那一版，在真实文件上漏报一处（大写「叁」读不出）、误报三类（整行合并的合计行、
+    人员数量区间、只有表头的窄列），这一批把它们逐个钉住。"""
+    real = _quote("回放-之江明细", [("科学数据标注服务（数学）", "300", "万条", "12,650.00", "3,795,000.00", "含税，包干价")],
+                  "3,795,000.00")
+    code, out = ins(_sheet("回放-之江一览", "人民币叁佰柒拾玖万伍仟元整"), real)
+    check("E53a 之江实验室真实报价（大写带「叁」、大小写同格、合计跨合并格）零发现", "未发现问题" in out, out[:600])
+    hdr7 = ["序号", "分项名称", "单位", "数量", "单价", "合计金额", "备注"]
+    d = _doc()
+    d.add_heading("分项报价明细表", 1)
+    t = _table(d, hdr7, [["1", "产品费用", "项", "1", "100.00", "100.00", ""],
+                         ["2", "实施费用", "项", "1", "200.00", "200.00", ""]])
+    cells = t.add_row().cells
+    cells[0].merge(cells[3]).text = "项目总价"
+    cells[5].text = "300.00"
+    p = WORK / "回放-项目总价.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E53b 整行合并的「项目总价」按合计行验，不误报成读不出来", "未发现问题" in out, out[:600])
+    d = _doc()
+    d.add_heading("分项报价明细表", 1)
+    t = _table(d, hdr7, [["1", "产品费用", "项", "", "", "", "可按细分模块分别报价"],
+                         ["2", "实施费用", "项", "", "", "", ""], ["3", "低代码平台", "套", "", "", "", ""]])
+    cells = t.add_row().cells
+    cells[0].merge(cells[6]).text = "项目总价"
+    p = WORK / "回放-整列空着.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E53c 报价表金额整列空着 → 点名「金额格都空着」，不说「没有一行能验算」也不说读不出来",
+          "报价表的金额格都空着" in out and "产品费用" in out and "没有一行能验算" not in out
+          and "读不出来" not in out, out[:600])
+    d = _doc()
+    d.add_heading("初次报价一览表", 1)
+    t = _table(d, ["序号", "标的名称", "规格型号（或具体服务）", "数量", "单价（元）", "合计（元）"],
+               [["1", "公式标注", "最终有效公式", "30万", "", ""]])
+    cells = t.add_row().cells
+    cells[0].merge(cells[5]).text = "响应报价（计价单位：人民币元）\n小写：_______\n大写：_______"
+    p = WORK / "回放-报价没填.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E53d 报价没填 → 点名单价与合价空着、总价还没填，不重复点「没有一行能验算」",
+          "单价和合价都空着" in out and "总价还没填" in out and "没有一行能验算" not in out, out[:600])
+    d = _doc()
+    d.add_heading("人员需求", 1)
+    _table(d, ["角色", "拟投入数量（人）"], [["标注员", "150~214"], ["审核员", "113~161"]])
+    p = WORK / "回放-人员表.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E53e 人员表里的数量区间不进金额验算", "未发现问题" in out, out[:400])
+    d = _doc()
+    d.add_heading("团队", 1)
+    _table(d, ["性别", "姓名", "备注"], [["男", "张三", ""], ["女", "李四", ""]], [0.9, 6, 6])
+    p = WORK / "回放-窄列只有表头.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E53f 只有表头两个字的窄列不点名", "未发现问题" in out, out[:400])
+    from PIL import Image
+    big = WORK / "big.png"
+    Image.new("RGB", (1000, 500), "green").save(big)
+    small = WORK / "small.png"  # e53 自己的小图：本用例单独跑时不依赖 e47
+    Image.new("RGB", (400, 200), "blue").save(small)
+
+    def pic(name, src=big, **kw):
+        d = _doc()
+        d.add_heading("附图", 1)
+        for i in range(kw.pop("n", 1)):
+            d.add_paragraph(f"第 {i + 1} 部分：")
+            d.add_picture(str(src), **kw)
+        p = WORK / f"{name}.docx"
+        d.save(str(p))
+        return p
+    code, out = ins(pic("回放-图-阈值", small, width=Cm(12.5)))    # 400px/12.5cm ≈ 81 DPI：真实图片的最低档
+    check("E53g 81 DPI（本机真实图片的最低档）不点名", "分辨率偏低" not in out, out[:400])
+    code, out = ins(pic("回放-图-轻拉伸", small, width=Cm(10), height=Cm(4.8)))  # 偏差 4%
+    check("E53h 拉伸偏差 4% 不点名", "拉伸变形" not in out, out[:400])
+    code, out = ins(pic("回放-图-超一点", width=Cm(15.6)))                      # 比可用宽度多 0.4 厘米
+    check("E53i 超出可用宽度 0.4 厘米不点名", "图片超出可用宽度" not in out, out[:400])
+    code, out = ins(pic("回放-图-超得多", width=Cm(16.5)))                      # 多 1.3 厘米
+    check("E53j 超出可用宽度 1.3 厘米点名（写明多出多少）", "图片超出可用宽度" in out and "多出 1.3 厘米" in out, out[:400])
+    bulk = pic("回放-图-成批", width=Cm(16.5), n=5)
+    res = WORK / "bulk.json"
+    code, out = ins(bulk, "--json", res)
+    check("E53k 同一文件 5 张图都超宽 → 表里并成一行，写明共几处",
+          out.count("图片超出可用宽度") == 1 and "共 5 处" in out, out[:700])
+    check("E53k' 并成一行后逐处的位置仍在 --json 结果里（5 条，各带自己的位置）",
+          len(json.loads(res.read_text(encoding="utf-8"))["findings"]) == 5,
+          res.read_text(encoding="utf-8")[:300])
+    raw = WORK / "回放-原始属性节.docx"
+    work = WORK / "w-props-sec"
+    for d_ in ("review", "body"):
+        (work / d_).mkdir(parents=True, exist_ok=True)
+    (work / "review" / "评审台.html").write_text("<html></html>", encoding="utf-8")
+    (work / "review" / ".progress-opened").write_text("", encoding="utf-8")
+    (work / "outline" / "tender-response-docs.md").parent.mkdir(parents=True, exist_ok=True)
+    (work / "outline" / "tender-response-docs.md").write_text("# 响应文件：投标文件\n## 目录\n- 目录\n- 甲节\n", encoding="utf-8")
+    d = Document()
+    d.add_heading("甲节", 1)
+    d.add_paragraph("正文。")
+    d.save(str(work / "body" / "甲节.docx"))
+    code, out = cw("--work", work, "--section", work / "body" / "甲节.docx")
+    check("E53l 流水线里查节文件不看节文件的文档属性（交付的是整本）",
+          code == 0 and "工具痕迹" not in out, f"exit={code} {out[:400]}")
+    code, out = ins(work / "body" / "甲节.docx")
+    check("E53m 单独检查这份文件时，文档属性里的工具痕迹照常点名", "工具痕迹" in out and "python-docx" in out, out[:400])
+    # 引擎自己插的图不能比正文区宽。回放时发现：image 命令想按页面宽度算，但「页宽 − 左右边距」
+    # 算出来是普通整数、没有 .cm，那一步总是抛异常被吞掉，宽度一直是兜底的 15 厘米——
+    # A4 页三边距 3.18 厘米时正文区只有 14.64 厘米，每张图都比正文和表格宽出 0.36 厘米
+    w2 = WORK / "w-img-width"
+    for d_ in ("review", "body", "outline"):
+        (w2 / d_).mkdir(parents=True, exist_ok=True)
+    (w2 / "review" / "评审台.html").write_text("<html></html>", encoding="utf-8")
+    (w2 / "review" / ".progress-opened").write_text("", encoding="utf-8")
+    sec = w2 / "body" / "附图节.docx"
+    code, out = tk("create", sec, "--title", "附图节", "--body", body("b-imgw", [{"text": "系统架构如下图："}]))
+    code, out = tk("image", sec, "--img", small)
+    mod = _load("tender-docx/scripts/docx_toolkit.py")
+    mod.require_docx()
+    d = mod.Document(str(sec))
+    blk = list(d.element.body.iterchildren())
+    usable = mod._block_widths_emu(d, blk)[id(blk[0])] / 360000
+    blip = next(d.element.body.iter(mod.qn("a:blip")))
+    holder = blip
+    while holder.tag not in (mod.qn("wp:inline"), mod.qn("wp:anchor")):
+        holder = holder.getparent()
+    cx = int(holder.find(mod.qn("wp:extent")).get("cx")) / 360000
+    check("E53n 引擎自己插的图宽度跟页面走，不超过正文区（页宽 − 左右边距）",
+          code == 0 and cx <= usable + 0.02 and abs(cx - usable) < 0.05, f"图宽 {cx:.2f} 厘米，正文区 {usable:.2f} 厘米")
+    # 表格比正文区宽 0.4 厘米（拷入的表常见，落进页边距里）不点名；宽 1 厘米以上才点名并写明多出多少
+    d = _doc()
+    d.add_heading("一览", 1)
+    _table(d, ["序号", "名称", "备注", "说明"], [["1", "甲", "", ""]], [4, 4, 4, 3.6])
+    p = WORK / "回放-表-超一点.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E53o 表格超出可用宽度 0.4 厘米不点名", "表格超出可用宽度" not in out, out[:500])
+    d = _doc()
+    d.add_heading("一览", 1)
+    _table(d, ["序号", "名称", "备注", "说明"], [["1", "甲", "", ""]], [4, 4, 4, 5.2])
+    p = WORK / "回放-表-超得多.docx"
+    d.save(str(p))
+    code, out = ins(p)
+    check("E53p 表格超出可用宽度 2 厘米点名（写明多出多少）", "表格超出可用宽度" in out and "多出 2.0 厘米" in out, out[:500])
+
+
+def e54():
+    """写节闸的指路话不能丢：评审台已建、写作进度面板未首开时，单节自查要拒查、退出码 2，
+    并说清该跑哪个命令。统一三形态解析时 `_SENTINEL` 只留了两个键，而提示语里还要找
+    tender-review——模型忘了先开面板时拿到的是一个 KeyError 报错栈（闸拦住了，路没指）。"""
+    work = WORK / "w-gate"
+    for d in ("review", "body"):
+        (work / d).mkdir(parents=True)
+    (work / "review" / "评审台.html").write_text("<html></html>", encoding="utf-8")
+    sec = work / "body" / "甲节.docx"
+    d = Document()
+    d.add_heading("甲节", 1)
+    d.add_paragraph("正文。")
+    d.save(str(sec))
+    code, out = cw("--work", work, "--section", sec)
+    check("E54a 进度面板未首开：拒查、退出码 2、给出该跑的命令、无报错栈",
+          code == 2 and "写作进度面板未首开" in out and "--open-progress" in out
+          and "build_review.py" in out and "Traceback" not in out, f"exit={code} {out[:300]}")
+
+
 if __name__ == "__main__":
     for name, fn in (("E01", e01), ("E02", e02), ("E03", e03), ("E04", e04), ("E05", e05), ("E06", e06),
                      ("E07", e07), ("E08", e08), ("E09", e09), ("E10", e10), ("E11", e11), ("E12", e12),
@@ -1091,7 +1682,9 @@ if __name__ == "__main__":
                      ("E27", e27), ("E28", e28), ("E29", e29), ("E30", e30), ("E31", e31),
                      ("E32", e32), ("E33", e33), ("E34", e34),
                      ("E35", e35), ("E36", e36), ("E37", e37), ("E38", e38), ("E39", e39),
-                     ("E40", e40)):
+                     ("E40", e40), ("E41", e41), ("E42", e42), ("E43", e43), ("E44", e44),
+                     ("E45", e45), ("E46", e46), ("E47", e47), ("E48", e48), ("E49", e49),
+                     ("E50", e50), ("E51", e51), ("E52", e52), ("E53", e53), ("E54", e54)):
         run(name, fn)
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     for f_ in FAIL:

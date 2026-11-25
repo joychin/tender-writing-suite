@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Check this tender document for disqualification risks"
   - "What materials do I need to prepare for this bid?"
-version: 2.2.3
+version: 2.2.4
 author: 灵燕智能
 ---
 
@@ -72,7 +72,8 @@ tender-review（评审台）、tender-docx（合册交付）——发布为单�
 | 第四步 写作准备 | tender-writing | 指引与承诺一次成形（两 tab 只读，给值走对话） | G4 / G5（一次停轮） |
 | 第五步 逐节生成 | tender-writing | **首开进度面板后**按模式路由写节（未 `--open-progress` 首开即写被工具硬拦） | — |
 | 第六步 全局校验 | tender-writing | 承诺对账 + 查重 + 残留扫描 + 招标格式件表格比对；跑完**直接进第七步合册**（不问「合册还是先补齐」；红线 8 的格式件比对不过须先修复） | G6 |
-| 第七步 合册整本 | tender-docx | 自动编号 + 目录实测页码 | — |
+| 第七步 合册整本 | tender-docx | 自动编号 + 目录实测页码 + 整本检查（只读，结果随收尾交给用户） | — |
+| 单独检查一份 Word | tender-docx | 只要检查不要写作：给一份或几份 Word，出文字结论 + 一张表（不改文件，用户说修才动） | — |
 | 确认面构建与服务 | tender-review | 分析报告 / 评审台 / 写作进度三页面 | 各门交付 |
 
 门行为与回复口径以 @references/stage-gates.md 与 @references/reply-style.md 为准，

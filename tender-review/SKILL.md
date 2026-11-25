@@ -13,7 +13,7 @@ examples_en:
   - "Open the review workbench so I can edit the outline"
   - "Refresh the commitments review page"
   - "Apply my outline edits to the artifacts"
-version: 2.2.3
+version: 2.2.4
 author: 灵燕智能
 ---
 
