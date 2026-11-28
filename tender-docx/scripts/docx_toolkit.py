@@ -949,7 +949,7 @@ def _materialize_cover(body_dir: Path, vol_name: str, multi: bool) -> Path:
     """登记的公司封面落成封面节文件（统一落盘口：清元数据＋记指纹），之后它就是普通
     节文件——模型按批注把项目字段改掉，重新合册不再重复落。"""
     src = layout_home() / ((_LAYOUT.get("assets") or {}).get("cover") or "")
-    sf = body_dir / (sanitize_name(vol_name) / "封面.docx" if multi else "封面.docx")
+    sf = (body_dir / sanitize_name(vol_name) / "封面.docx") if multi else (body_dir / "封面.docx")
     sf.parent.mkdir(parents=True, exist_ok=True)
     _save_doc(Document(str(src)), sf)
     return sf
@@ -4488,13 +4488,14 @@ def _save_doc(doc, path, by: str = "") -> None:
 
 
 def _book_edited_note(book) -> str:
-    """整本在上次生成之后被手工改过 → 返回一句提醒；没有指纹记录（旧版生成的）无从判断，返回空串。"""
+    """整本在上次生成之后被手工改过 → 返回一句提醒；没有指纹记录（旧版生成的）无从判断，返回空串；
+    整本不在（删了要重新生成）谈不上被手工改过，同样返回空串。"""
     try:
         rec = json.loads(Path(str(book) + FP_SUFFIX).read_text(encoding="utf-8"))
         want = rec.get("sha256") if isinstance(rec, dict) else None
     except Exception:  # noqa: BLE001
         return ""
-    if not want or want == _sha256(book):
+    if not want or not Path(book).exists() or want == _sha256(book):
         return ""
     return (f"现有整本 {Path(book).name} 在上次生成（{rec.get('at', '时间不详')}）之后被手工改过"
             f"——本次生成会覆盖这些改动；要保留，先问清用户改了什么、回到节文件里改")

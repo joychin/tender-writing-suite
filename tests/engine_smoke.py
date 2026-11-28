@@ -155,6 +155,10 @@ E102 解析产物没记源指纹（旧版产物）：不拦、提醒建议重新
 E103 旧名名单.txt 隐形约定退场＋空名单明说「残留扫描未执行」（不许没查装查过）
 E104 登记资料库旧名自动载入：他主体痕迹=疑似残留不拦、自己主体不扫、显式 --old-names 仍是红线、
     主体悬空（承诺清单没有投标主体行）不猜
+
+第 23 批 之江真机两处崩溃入库（2026-11-28 真机就地补丁被 2.4.5 同步覆盖，官方修复落仓库）
+E105 多册合册 + 登记版式封面：封面节点无节文件时按册落公司封面（改前 str/str TypeError 必崩）
+E106 删整本重合册：指纹记录在、整本不在——正当处置不崩（改前 FileNotFoundError），指纹刷新
 """
 import io
 import itertools
@@ -4496,6 +4500,55 @@ def e104():
           f"exit={code} {out[:300]}")
 
 
+def e105():
+    """多册合册 + 登记版式封面：封面节点没有节文件时按册落公司封面。真机 2026-11-28：
+    _materialize_cover 在多册形态把「册名/封面.docx」写成字符串相除（str / str），
+    首次多册合册就 TypeError 崩——单册形态 E94 盖不住这条路径。"""
+    home, spec, out, code = _adopt("多册封面", _header_doc("多册封面源"), source=_header_doc("多册封面源二"))
+    outline = ("# 响应文件：资格文件\n## 目录\n- 封面\n- 目录\n- 甲节\n\n"
+               "# 响应文件：商务技术文件\n## 目录\n- 封面\n- 目录\n- 乙节\n")
+    work, _ = make_work("多册封面", outline, [])
+    for vol, leaf in (("资格文件", "甲节"), ("商务技术文件", "乙节")):
+        (work / "body" / vol).mkdir(parents=True, exist_ok=True)
+        code, out = tk("create", work / "body" / vol / f"{leaf}.docx", "--title", leaf,
+                       "--body", body(f"多册封面-{leaf}", [{"text": _LSENT2}]), env=_LE(home))
+        assert code == 0, out
+    code, out = tk("assemble", "--work", work, env=_LE(home))
+    covers = [work / "body" / v / "封面.docx" for v in ("资格文件", "商务技术文件")]
+    vols = sorted((work / "body").glob("整本-*.docx"))
+    check("E105a 多册合册不崩：两册封面各按册落位（body/<册名>/封面.docx），两本整本都在",
+          code == 0 and all(c.is_file() for c in covers) and len(vols) == 2,
+          f"exit={code} out={out[:280]}")
+    check("E105b 落的是公司封面（内容对得上），且两册都点名待改字段",
+          all("智慧园区数据平台项目投标文件" in Document(str(c)).paragraphs[1].text for c in covers)
+          and out.count("公司封面") >= 2,
+          f"out={out[:280]}")
+
+
+def e106():
+    """删掉整本再合册：指纹记录还在、整本不在——正当处置不许崩。真机 2026-11-28：
+    删掉两册带旧名残留的整本后重合册，_book_edited_note 对不存在的文件算 sha256
+    抛 FileNotFoundError。文件不在就谈不上「被手工改过」，返回空提醒照常重建。"""
+    work, _ = make_work("指纹缺本", "# 响应文件：投标文件\n## 目录\n- 封面\n- 目录\n- 甲节\n",
+                        leaves=("甲节",), with_body=True)
+    code, out = tk("assemble", "--work", work)
+    vol = next((work / "body").glob("整本-*.docx"), None)
+    fp = Path(str(vol) + ".fingerprint.json") if vol else None
+    check("E106a 首次合册记指纹：整本与 .fingerprint.json 都在",
+          code == 0 and vol is not None and fp is not None and fp.is_file(),
+          f"exit={code} out={out[:200]}")
+    vol.unlink()                                # 删整本、指纹记录留着（真机删的就是带旧名的整本）
+    code, out = tk("assemble", "--work", work)
+    import hashlib
+    vol2 = work / "body" / vol.name
+    fp2 = Path(str(vol2) + ".fingerprint.json")
+    rec = json.loads(fp2.read_text(encoding="utf-8")) if fp2.is_file() else {}
+    h = hashlib.sha256(vol2.read_bytes()).hexdigest() if vol2.is_file() else ""
+    check("E106b 整本已删、指纹还在：重合册不崩、整本重建、指纹刷新成新文件的",
+          code == 0 and vol2.is_file() and rec.get("sha256") == h,
+          f"exit={code} out={out[:240]}")
+
+
 if __name__ == "__main__":
     for name, fn in (("E01", e01), ("E02", e02), ("E03", e03), ("E04", e04), ("E05", e05), ("E06", e06),
                      ("E07", e07), ("E08", e08), ("E09", e09), ("E10", e10), ("E11", e11), ("E12", e12),
@@ -4519,7 +4572,8 @@ if __name__ == "__main__":
                      ("E90", e90), ("E91", e91), ("E92", e92),
                      ("E93", e93), ("E94", e94), ("E95", e95), ("E96", e96),
                      ("E97", e97), ("E98", e98), ("E99", e99),
-                     ("E100", e100), ("E101", e101), ("E102", e102), ("E103", e103), ("E104", e104)):
+                     ("E100", e100), ("E101", e101), ("E102", e102), ("E103", e103), ("E104", e104),
+                     ("E105", e105), ("E106", e106)):
         run(name, fn)
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     for f_ in FAIL:
