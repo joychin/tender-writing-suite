@@ -210,6 +210,20 @@ def check(pkg: Path) -> list[str]:
         problems.append(f"{pkg.name}: name 不合规（小写字母/数字/连字符 ≤64）：{name}")
     if len(meta.get("description", "")) > 1024:
         problems.append(f"{pkg.name}: description 超 1024 字符")
+    # examples 门（平台上架解析闸，2026-11-28 真机：入口 6/4 上传被解析失败拒装）：
+    # examples_zh / examples_en 各最多 3 条，且两侧数量必须一致
+    ex_counts = {"examples_zh": 0, "examples_en": 0}
+    fm_text = skill.read_text(encoding="utf-8")
+    fm_block = fm_text[3:fm_text.index("---", 3)]
+    for key in ex_counts:
+        m = re.search(rf"^{key}:\n((?:  - .*\n)+)", fm_block, re.M)
+        ex_counts[key] = len(m.group(1).strip().splitlines()) if m else 0
+        if ex_counts[key] > 3:
+            problems.append(f"{pkg.name}: {key} 有 {ex_counts[key]} 条——平台上架解析最多 3 条")
+    if ex_counts["examples_zh"] != ex_counts["examples_en"]:
+        problems.append(f"{pkg.name}: examples_zh 与 examples_en 数量不一致"
+                        f"（中文 {ex_counts['examples_zh']} 条、英文 {ex_counts['examples_en']} 条"
+                        "——平台要求一致）")
     tc, basis = token_count(body)
     if tc > BODY_TOKEN_LIMIT:
         problems.append(f"{pkg.name}: SKILL.md 正文约 {tc} tokens（{basis}），"

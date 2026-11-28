@@ -35,9 +35,9 @@
 ## 常用命令
 
 ```bash
-python3 listing/self_check.py        # 改动技能包后必跑：frontmatter 必填与规格/YAML/逐技能 token 闸/空目录/
-                                     #   同技能与跨技能引用存在性/产品专属词/沿革从句/六包版本一致/
-                                     #   缺依赖冒烟/模板中文字体/CHANGELOG 顶行
+python3 listing/self_check.py        # 改动技能包后必跑：frontmatter 必填与规格/examples 上限与中英一致/
+                                     #   YAML/逐技能 token 闸/空目录/同技能与跨技能引用存在性/产品专属词/
+                                     #   沿革从句/六包版本一致/缺依赖冒烟/模板中文字体/CHANGELOG 顶行
 python3 tests/engine_smoke.py        # 引擎回归电池 E01–E99（内容保真/批注与编号/跨平台与发版闸/真机复盘/Windows 兼容/
                                      #   格式件保真红线/文档检查/公司版式读取/落盘元数据清零/落盘路径防呆/.doc 通道回退/
                                      #   版式读取遇到不规整文档/用户模板缺标题样式/超过 5MB 的 .doc 不自动转/
@@ -76,7 +76,10 @@ python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-wri
   历史上曾」——版本史只陈述当前版本做什么，不写对比叙事。CHANGELOG 只查顶行（新版本行）；
   闸是子串匹配，在版本行里引用禁词同样命中，改用「改前」一类说法。
 - **frontmatter 纪律**：字符串值必须单行双引号（值内半角冒号+空格会被平台 YAML 解析器判嵌套映射而拒装）；
-  `name` 限小写字母/数字/连字符且 ≤64，`description` ≤1024 字符；必填字段见 self_check 的 `REQUIRED_FIELDS`。
+  `name` 限小写字母/数字/连字符且 ≤64，`description` ≤1024 字符；
+  `examples_zh`/`examples_en` 各最多 3 条且两侧数量必须一致（平台上架解析硬拒——2.4.2 曾以
+  中文 6 条/英文 4 条上传被解析失败拒装，self_check 已补该维度）；被裁掉的示例其触发词由
+  `description` 承接；必填字段见 self_check 的 `REQUIRED_FIELDS`。
 - **版本联动**：六个 `SKILL.md` frontmatter `version` 必须同步递增，并在 `listing/CHANGELOG.md`
   第 1 行插入新版本行（一行一版本、无表头，最新在最上）。README 的版本徽章是手写值，
   没有任何闸校验，发版时手动同步。

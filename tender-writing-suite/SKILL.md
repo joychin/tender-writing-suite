@@ -6,17 +6,13 @@ description: "标书工作的重型武器——把招标文件写成可以递交
 description_zh: "标书工作的重型武器：把一份招标文件，变成能直接递交的投标文件整本 Word。实战出身：多份真实标书用它从头写到递交，每个版本的迭代都来自真实项目的复盘修复。写之前，废标条款全扫一遍，评分办法和资格门槛整理成表；写作中，工期、人员、报价等数字只从你拍板的清单取值，缺的留批注；历史标书可复用的段落、表格、图片按原件拷贝，不让模型重写。每章挂来源编号，覆盖情况可查。收尾机器校验：承诺数字逐条对账、章节查重、旧机构名残留清零，然后自动编号合册成书。也可以只做体检问答：废标风险、资格门槛、评分权重，逐条给出处。"
 description_en: "The heavy artillery of bid writing — turns a tender document into a submission-ready bid (a complete Word volume), proven across multiple full real bids; also answers one-shot questions about disqualification risks, eligibility thresholds, and scoring methods. How it works: disqualification clauses are scanned in full before writing; commitment figures such as duration, staffing, and pricing are taken only from the user-approved list, missing ones become Word comments; reusable paragraphs, tables, and images from past proposals are copied over as-is. Use when the user wants to write a bid, tender response, technical or commercial proposal, analyze a tender document, check disqualification risks, sort out scoring criteria and eligibility thresholds, or plan the response outline. Not for documents unrelated to bidding. This skill is the suite entry point: discipline, gates and stage routing."
 examples_zh:
-  - "把这份招标文件写成一套能递交的投标文件"
-  - "帮我检查这份招标文件有哪些废标风险"
-  - "这个项目投标需要准备哪些材料"
-  - "把我们公司标书的版式整理成一张表"
-  - "以后标书都按这个样式做"
-  - "把我们公司的版式登记下来"
+  - "按这份招标文件把标书写出来"
+  - "这个招标文件分析一下，然后告诉我响应文件如何组成"
+  - "检查一下我的投标文件，看看有哪些缺失。"
 examples_en:
-  - "Analyze this tender document, extract the key points, and generate the outline"
-  - "Check this tender document for disqualification risks"
-  - "What materials do I need to prepare for this bid?"
-  - "Extract the formatting spec (fonts, sizes, spacing, page setup) from our company's past proposal"
+  - "Write the bid based on this tender document"
+  - "Analyze this tender document and tell me how to structure our response"
+  - "Check my bid document for anything missing"
 version: 2.4.2
 author: 灵燕智能
 ---
