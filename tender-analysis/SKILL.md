@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document and list the disqualification risks"
   - "Turn the scoring criteria and eligibility thresholds into tables"
   - "Plan the bid response outline for this project"
-version: 2.4.8
+version: 2.5.0
 author: 灵燕智能
 ---
 

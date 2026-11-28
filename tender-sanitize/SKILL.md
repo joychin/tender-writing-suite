@@ -13,7 +13,7 @@ examples_en:
   - "Strip author info from this bid document for anonymous submission"
   - "Check whether these files still reveal who made them"
   - "Clean all document properties before submission"
-version: 2.4.8
+version: 2.5.0
 author: 灵燕智能
 ---
 

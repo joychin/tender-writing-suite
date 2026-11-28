@@ -13,7 +13,7 @@ examples_en:
   - "Open the review page so I can edit the outline"
   - "Refresh the commitments review page"
   - "Save my outline edits"
-version: 2.4.8
+version: 2.5.0
 author: 灵燕智能
 ---
 

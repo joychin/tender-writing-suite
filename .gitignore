@@ -7,6 +7,9 @@ listing/上架指引.docx
 listing/商品文案.md
 listing/提审说明.md
 
+# 页面视觉原型（评审台四方向与徽章两方案 demo，本机留存备查），不随开源仓库分发
+原型/
+
 # 本地自动化会话与测试产物
 .playwright-mcp/
 .zcode/
