@@ -2,30 +2,34 @@
 name: tender-writing-suite
 display_name: 灵燕标书写作套件
 display_name_en: Full-Pipeline Bid Writing Suite
-description: "标书工作的重型武器——把招标文件写成可以递交的投标文件（整本 Word），已在多份真实标书的完整编写中验证；也能单独回答废标风险、资格门槛、评分办法这类问题。做法：动笔前先全扫废标条款；工期、人员、报价等数字只写用户拍板过的值，没有的留 Word 批注；历史标书能用的段落、表格、图片原样拷贝复用。适用于：写标书、写投标文件/响应文件/技术标/商务标/投标方案，解读招标文件，查废标风险，梳理评分办法与资格门槛，规划投标目录。与招投标无关的文档不适用。本技能是五技能套件的入口与总控：负责红线、确认门与环节路由。"
+description: "标书工作的重型武器——把招标文件写成可以递交的投标文件（整本 Word），已在多份真实标书的完整编写中验证；也能单独回答废标风险、资格门槛、评分办法这类问题。做法：动笔前先全扫废标条款；工期、人员、报价等数字只写用户拍板过的值，没有的留 Word 批注；历史标书能用的段落、表格、图片原样拷贝复用；也能把一份 Word 版历史标书的版式读成规格表、确认后登记成公司版式，后面的标书自动按它出（字体、字号、行距、页面、表格、目录、页码这些）。适用于：写标书、写投标文件/响应文件/技术标/商务标/投标方案，解读招标文件，查废标风险，梳理评分办法与资格门槛，规划投标目录，整理公司标书的版式、按公司样式出稿。与招投标无关的文档不适用。本技能是六技能套件的入口与总控：负责红线、确认门与环节路由。"
 description_zh: "标书工作的重型武器：把一份招标文件，变成能直接递交的投标文件整本 Word。实战出身：多份真实标书用它从头写到递交，每个版本的迭代都来自真实项目的复盘修复。写之前，废标条款全扫一遍，评分办法和资格门槛整理成表；写作中，工期、人员、报价等数字只从你拍板的清单取值，缺的留批注；历史标书可复用的段落、表格、图片按原件拷贝，不让模型重写。每章挂来源编号，覆盖情况可查。收尾机器校验：承诺数字逐条对账、章节查重、旧机构名残留清零，然后自动编号合册成书。也可以只做体检问答：废标风险、资格门槛、评分权重，逐条给出处。"
 description_en: "The heavy artillery of bid writing — turns a tender document into a submission-ready bid (a complete Word volume), proven across multiple full real bids; also answers one-shot questions about disqualification risks, eligibility thresholds, and scoring methods. How it works: disqualification clauses are scanned in full before writing; commitment figures such as duration, staffing, and pricing are taken only from the user-approved list, missing ones become Word comments; reusable paragraphs, tables, and images from past proposals are copied over as-is. Use when the user wants to write a bid, tender response, technical or commercial proposal, analyze a tender document, check disqualification risks, sort out scoring criteria and eligibility thresholds, or plan the response outline. Not for documents unrelated to bidding. This skill is the suite entry point: discipline, gates and stage routing."
 examples_zh:
   - "把这份招标文件写成一套能递交的投标文件"
   - "帮我检查这份招标文件有哪些废标风险"
   - "这个项目投标需要准备哪些材料"
+  - "把我们公司标书的版式整理成一张表"
+  - "以后标书都按这个样式做"
+  - "把我们公司的版式登记下来"
 examples_en:
   - "Analyze this tender document, extract the key points, and generate the outline"
   - "Check this tender document for disqualification risks"
   - "What materials do I need to prepare for this bid?"
-version: 2.2.4
+  - "Extract the formatting spec (fonts, sizes, spacing, page setup) from our company's past proposal"
+version: 2.4.2
 author: 灵燕智能
 ---
 
 # 标书全流程写作（套件入口）
 
-从招标文件到可递交的标书 Word。本技能是五技能套件的**入口与总控**：红线、
+从招标文件到可递交的标书 Word。本技能是六技能套件的**入口与总控**：红线、
 确认门、环节路由与工作目录约定都在本文件；具体环节由平级技能执行——进入哪步
 先载入该步点名的技能，再按那个技能的 SKILL.md 执行。
 
 套件构成：本技能（入口）、tender-analysis（解析分析）、tender-writing（写作）、
-tender-review（评审台）、tender-docx（合册交付）——发布为单包（环节在包内
-`stages/` 下）或五技能平级两种形态安装。
+tender-review（评审台）、tender-docx（合册交付）、tender-sanitize（文档脱敏）
+——发布为单包（环节在包内 `stages/` 下）或六技能平级两种形态安装。
 
 ## 红线（置顶：长会话压缩只保留文件开头）
 
@@ -73,7 +77,9 @@ tender-review（评审台）、tender-docx（合册交付）——发布为单�
 | 第五步 逐节生成 | tender-writing | **首开进度面板后**按模式路由写节（未 `--open-progress` 首开即写被工具硬拦） | — |
 | 第六步 全局校验 | tender-writing | 承诺对账 + 查重 + 残留扫描 + 招标格式件表格比对；跑完**直接进第七步合册**（不问「合册还是先补齐」；红线 8 的格式件比对不过须先修复） | G6 |
 | 第七步 合册整本 | tender-docx | 自动编号 + 目录实测页码 + 整本检查（只读，结果随收尾交给用户） | — |
-| 单独检查一份 Word | tender-docx | 只要检查不要写作：给一份或几份 Word，出文字结论 + 一张表（不改文件，用户说修才动） | — |
+| 单独检查一份 Word | tender-docx | 只要检查不要写作：给一份或几份 Word，出文字结论 + 一张表（不改被检查的文件，用户说修才动） | — |
+| 公司版式 | tender-docx | 给一份 Word 版历史标书，把它的版式读成规格表（字体字号行距、页面、表格、目录、封面）交给用户确认，点头后登记为公司版式——之后建节、合册自动按它出；改版式走对话修订 | — |
+| 清除文档痕迹 | tender-sanitize | 递交前脱敏：给 Word/PDF 体检出属性痕迹清单（作者、单位、工具痕迹），清理出副本（原件与正文都不动），复核回执 | — |
 | 确认面构建与服务 | tender-review | 分析报告 / 评审台 / 写作进度三页面 | 各门交付 |
 
 门行为与回复口径以 @references/stage-gates.md 与 @references/reply-style.md 为准，
@@ -83,7 +89,7 @@ tender-review（评审台）、tender-docx（合册交付）——发布为单�
 
 套件有两种安装形态，环节间引用一律以**安装根**为基准：
 
-- **五技能平级形态**（多技能环境逐个安装）：安装根＝本技能目录的上一级；
+- **六技能平级形态**（多技能环境逐个安装）：安装根＝本技能目录的上一级；
 - **单包形态**（上架与一次导入）：环节收在本包 `stages/` 下，安装根＝本技能目录
   本身（`tender-writing-suite` 即本包），环节路径带 `stages/` 前缀，「载入某环节」
   ＝读 `stages/<环节>/SKILL.md` 并按其执行。
@@ -125,15 +131,22 @@ work/
 命令并等用户装完，不要等工具报错才说（依赖属于必须提前告知的使用条件）：
 
 ```bash
-pip install python-docx pypdfium2 docxcompose Pillow
+pip install python-docx pypdfium2 docxcompose Pillow pypdf
 ```
 
 Windows 上解释器命令通常是 `python`（`python3` 常是微软商店的占位程序），装依赖写作
-`python -m pip install …`；LibreOffice 装在默认位置即可，脚本自动识别。
+`python -m pip install …`。LibreOffice 不是必装：只有目录页码实测要用它（含它导出的
+预览 PDF；装在默认位置即可，脚本自动识别）。
 
 python-docx ≥1.0；EMF/WMF 矢量图拷不进（工具告警跳过），需图处先 `render-page`
-转 PNG 再 `image` 插入。版式模板在 `tender-docx/templates/base-template.docx`
-（需重建时跑 `tender-docx/scripts/make_template.py`）。
+转 PNG 再 `image` 插入。版式缺省用登记的公司版式（没有登记用内置基准模板
+`tender-docx/templates/base-template.docx`，需重建时跑 `tender-docx/scripts/make_template.py`）。pypdf 只给文档脱敏
+（tender-sanitize）清 PDF 属性用，docx/docm 清理纯标准库。`.doc` 一律先转成 `.docx`：
+**超过 5MB 的 `.doc` 脚本不自动转**（LibreOffice 转大文件可能很久都转不完），直接请用户
+在 Word/WPS 里另存，这一步不要替用户自动化。5MB 以内：本机有 LibreOffice 脚本自动转（超时或
+失败时脚本会终止转换并退出，同样请用户另存），没有就由你选本机可用的办法转换——解析用
+`--converted <那份 .docx>` 把转好的文件交回，版式读取与脱敏对那份 `.docx` 重跑同一条
+命令（细则在各环节技能；LibreOffice 体积大，不要一上来就让用户安装）。
 
 依赖未装齐时脚本以退出码 2 打印同一条安装提示（不抛 traceback）：解析、目录、
 评审台页面这些纯 md 环节照样能跑，正文校验与合册必须有 python-docx。

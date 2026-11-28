@@ -4,6 +4,7 @@ python-docx>=0.8.11
 docxcompose>=1.4
 pypdfium2>=4.0
 Pillow>=9.0
+pypdf>=5.0
 
 # 可选：docx_toolkit 的 diagram 子命令真图输出（缺省改走宿主渲染 HTML 截图）
 # matplotlib

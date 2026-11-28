@@ -16,7 +16,10 @@ agent 后续读的那份 md）；指引与承诺两 tab 只读展示，要调整
 零按钮、单文件自包含（可转发可打印）。**交付时机：单轮体检出表后、G2（正常路径首次全量交付）；解析异常停 G1 时亦产**
 ——分析阶段「看分析」交给用户的就是它，也是该阶段唯一交付面（宿主有内联
 HTML/附件展示能力即作为产物呈现，否则给文件引用；打印/转发场景直接用文件）；
-报告页不承载任何确认控件——澄清处理、目录确认等确认动作分别在对话与评审台
+**交付链接＝报告页直链**：`--pages report` 构建回显的 [交付链接] 就是
+`<基址>report.html?v=<指纹>`（服务未起时为报告页静态文件路径），点开即报告——
+评审台链接自 G3 全量构建起才交付，勿拿评审台根地址标成「打开分析报告」
+（评审台总览首屏是待确认卡，报告入口在其后）。报告页不承载任何确认控件——澄清处理、目录确认等确认动作分别在对话与评审台
 （G3 起）进行，报告页不构成第二确认通道。内容 = work/analysis/ 六张登记表全量
 （来源与项目概况/结构要求/商务技术要求/评分/废标/澄清，各带覆盖范围声明），
 与评审台同一份 payload，零分叉。
@@ -50,10 +53,10 @@ agent 无需逐节刷新页面）；静态模式每节重跑 `build_review.py`�
 
 ```bash
 # 路径 A（默认）：本地服务直写——页面「保存」直接改 work/ 文件
-python3 scripts/build_review.py --work work --pages report   # 分析阶段（解析异常 G1 / G2）：只产分析报告
+python3 scripts/build_review.py --work work --pages report   # 分析阶段（解析异常 G1 / G2）：只产分析报告；[交付链接]=报告页直链（无服务=静态文件路径）
 python3 scripts/serve_review.py --work work            # G3 先起服务，打印形如下面的裸 URL
 # [评审台服务已启动] http://127.0.0.1:62561/<token>/   （/report.html = 分析报告；/progress.html = 写作进度，自动刷新）
-python3 scripts/build_review.py --work work            # 再全量生成；服务已起时回显 [交付链接]（带 ?v=），复制它交付
+python3 scripts/build_review.py --work work            # 再全量生成；服务已起时回显 [交付链接]（评审台，带 ?v= 与 #tab 锚点）+ [报告页链接]，照抄交付
 python3 scripts/serve_review.py --work work --status   # 后续引用前探活（刚起服务不要立刻跑，后台启动有竞态）
 python3 scripts/serve_review.py --work work --stop     # 收尾关停（必做）
 ```
@@ -61,6 +64,8 @@ python3 scripts/serve_review.py --work work --stop     # 收尾关停（必做�
 服务未起时全量 `build_review.py` 不回显交付链接，只提示「先起服务再重跑」——
 G3 的顺序是**起服务 → 重跑全量 build → 复制 [交付链接]**；初建那次没有 `?v=`
 链接，不要拿起台时的裸 URL 交付（宿主预览面板对相同 URL 不重载）。
+分析阶段两道门（G1 异常 / G2）不受此限：`--pages report` 在服务未起时回显的
+[交付链接] 就是报告页文件路径，静态交付直接可用。
 
 ```bash
 # 路径 B（兜底）：服务起不来（远程沙箱/用户本地打不开 localhost）→ 静态版离线流转

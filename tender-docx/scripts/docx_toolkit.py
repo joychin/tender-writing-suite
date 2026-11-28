@@ -12,7 +12,13 @@
     assemble   按目录树合并节文件为整本（章节编号/目录页/小标题降级/批注迁移）
     toc-pages  给合册文件的静态目录条目写入实测页码（需 LibreOffice）
     inspect    文档检查（只读）：金额验算、表格版式、图片、编号与占位、修订痕迹等，
-               出文字结论 + 一张表；不改文件、不拦流程（也可 --work 查整套的整本）
+               出文字结论 + 一张表；不改被检查的文件、不拦流程（也可 --work 查整套的整本）
+               （--json 后面跟的是结果落盘路径，不是开关；不给就只打印）
+    layout-read 版式规格读取（只读）：把 Word 版历史标书读成版式规格表
+               （项目｜取值｜依据｜确定/疑似）——「按这个样式来做」场景的读取端
+    layout-adopt 登记公司版式：确认后的规格表登记为本机默认版式，之后建节、合册
+               不指定模板就自动按它出（--set 做对话修订）
+    layout-show 查看登记的公司版式      layout-forget 取消登记（原规格表留档）
 
 依赖：python-docx（assemble 另需 docxcompose；render-page 需 pypdfium2+Pillow）。
 模型不直接改 docx 二进制——内容修改一律走本工具。
@@ -62,7 +68,10 @@ ILLEGAL = re.compile(r'[/\\:*?"<>|\n\r]')
 
 
 def die(msg: str, code: int = 1):
-    print(f"[失败] {msg}")
+    first, *rest = str(msg).split("\n")
+    print(f"[失败] {first}")
+    for ln in rest:  # 多行消息（如 .doc 的回退指引）：续行缩进对齐，不散落成正文
+        print(f"        {ln}")
     sys.exit(code)
 
 
@@ -85,6 +94,194 @@ def require_docx() -> None:
     Document, WD_ORIENT = _Document, _WD_ORIENT
     WD_STYLE_TYPE, WD_ALIGN_PARAGRAPH = _WD_STYLE_TYPE, _WD_ALIGN_PARAGRAPH
     OxmlElement, qn, Cm, Pt = _OxmlElement, _qn, _Cm, _Pt
+
+
+# 结果落盘路径的后缀与它写出的格式对不上就拒：最常见的误用是把要检查的 Word 文件
+# 跟在 --json 后面——--json 是「结果写到哪个文件」，不是「按 JSON 输出」的开关。
+_DOC_SUFFIXES = {".docx", ".docm", ".doc", ".dotx", ".dotm", ".pdf", ".xlsx", ".xlsm", ".pptx", ".ppsx"}
+
+
+def _work_docx(work) -> list[Path]:
+    """工作区 body/ 下的全部 Word 文件（整本与各册节文件），跳过 Word/WPS 的占用锁文件。
+    落盘防呆拿它当「本次会读到的文件」——比 inspect 自己枚举的宽，宁可多挡。"""
+    body = Path(work) / "body"
+    if not body.is_dir():
+        return []
+    # 只认文件：工作区里有按源文件名命名的目录，名字本身就以 .docx 结尾
+    return [p for p in sorted(body.rglob("*.docx"))
+            if p.is_file() and not p.name.startswith(("~$", ".~"))]
+
+
+def guard_dump_path(out, inputs=(), suffix: str = ".json", flag: str = "--json", hint: str = "") -> None:
+    """结果落盘前的防呆（真机事故：模型把 `inspect --json 标书.docx` 当成「按 JSON 输出
+    检查结果」——文件参数被 --json 吃掉，检查了 0 份文件，然后把一份真实标书写成了 63
+    字节的报告）。写之前拦，两条都拒（退出码 2）：
+    ① 落盘路径与本次要读的文件是同一个——写进去就是覆盖它；
+    ② 后缀不是这个参数写出的格式（--json 须 .json、--out 须 .md）——要读的 Word 文件
+    直接跟在命令后面，不是跟在 --json 后面。
+    调用方一律在读文件之前调：拦下时什么都还没做。hint 是正确写法的示例，进报错。"""
+    o = Path(out)
+    tail = f"，如 {hint}" if hint else ""
+    for p in inputs:
+        try:
+            same = o.resolve() == Path(p).resolve() or (o.exists() and os.path.samefile(o, p))
+        except OSError:
+            same = False
+        if same:
+            die(f"{flag} 要写入的文件和要读取的文件是同一个，写进去就把它覆盖了：{p}"
+                f"——换一个 {suffix} 路径{tail}", 2)
+    if o.suffix.lower() == suffix:
+        return
+    if o.suffix.lower() in _DOC_SUFFIXES:
+        die(f"{flag} 后面跟的是结果落盘的路径，不是要读取的文件：{o.name} 是 Word/PDF 文档，"
+            f"写进去就把它覆盖了。要读取的文件直接跟在命令后面{tail}", 2)
+    die(f"{flag} 的落盘路径须以 {suffix} 结尾（它不是开关）：{o}{tail.replace('，如', '。如')}", 2)
+
+
+# 脚本内置的自动转换只有 LibreOffice（本机唯一实测过的通道）。没有它时「.doc → .docx」
+# 交给模型选办法：这里只把「本机装了哪些能打开 .doc 的 Office 套件」探出来写进提示，
+# 不替它调用——Word/WPS 的自动化各平台各版本差异大，没在真机验证过的不内置
+# （WPS for Mac 实测没有脚本接口；Windows 的自动化接口只能在 mac 上模拟）。
+# 下面这一段在套件里共三份（脱敏 strip_metadata、解析 parse_document、版式读取
+# docx_toolkit）——环节技能各自独立安装不共享模块，改一处同步三处，
+# engine_smoke E76g 钉住三份逐字一致。
+_MAC_OFFICE = (("Microsoft Word", "Microsoft Word.app"), ("WPS Office", "wpsoffice.app"),
+               ("Pages", "Pages.app"))
+_WIN_PROGID = (("Microsoft Word", "Word.Application"), ("WPS Office", "KWPS.Application"))
+
+
+def _installed_office() -> list[str]:
+    """本机已安装、能把 .doc 另存为 .docx 的 Office 套件名（去重保序）。只做存在性探测：
+    macOS 看应用包，Windows 看自动化接口的注册；探测出错或别的系统返回空——只是少一条线索。"""
+    found: list[str] = []
+    try:
+        if sys.platform == "darwin":
+            for root in ("/Applications", os.path.expanduser("~/Applications")):
+                for name, bundle in _MAC_OFFICE:
+                    if name not in found and os.path.isdir(os.path.join(root, bundle)):
+                        found.append(name)
+        elif sys.platform == "win32":
+            import winreg
+            for name, progid in _WIN_PROGID:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, progid):
+                        found.append(name)
+                except OSError:
+                    continue
+    except Exception:  # noqa: BLE001
+        pass
+    return found
+
+
+def _hand_over_hint(why: str, next_step: str) -> str:
+    """没有 LibreOffice 时给模型的回退指引：转换这一步交它选办法，后面的事仍由脚本接着做。
+    why 说这份脚本为什么只认 .docx，next_step 说转好之后怎么接。"""
+    found = _installed_office()
+    if found:
+        tools = ("转换这一步交给你选办法（宿主自带的文档转换能力也算）。本机检测到已装："
+                 + "、".join(found) + "。\n"
+                 "能用就自动化另存——Windows 上 Word/WPS 有自动化接口，macOS 上 Word、Pages 可脚本化，"
+                 "WPS for Mac 实测没有脚本接口；不能自动化就请用户在里面对话框另存。\n")
+    else:
+        tools = ("转换这一步交给你选办法（宿主自带的文档转换能力也算）。"
+                 "本机没检测到常见的 Office 套件（Word / WPS / Pages）。\n")
+    return ("这份是 .doc（旧版二进制格式），" + why + "；本机没有找到 LibreOffice，脚本内置的自动转换只有它。\n"
+            + tools + next_step)
+
+
+# 超过这条线的 .doc 不自动转换（用户 2026-11-27 定：超过 5M 的提醒用户自己转换）。起因是
+# 真机上一份 26.7MB 的 .doc 让 LibreOffice 转满 300 秒超时，模型随后把文字抽出来自己拼了
+# 一份丢光版式的 docx 交回来——大文件既不耗那 300 秒，也不请模型另想办法。5MB 是用户定的
+# 值、不是标定值：本机 9 份真实 .doc 实测 5.4–23.6MB 的都是 2–3 秒转完，只有那一份转不出来。
+# 这一段同样三份逐字同口径（engine_smoke E79f 钉住）。
+_DOC_AUTO_LIMIT = 5_000_000
+
+
+def _oversize_doc_hint(size_bytes: int, next_step: str) -> str:
+    """超过 _DOC_AUTO_LIMIT 的 .doc 的提示：不自动转换，也不请模型另想办法，请用户自己另存。
+    next_step 说转好之后怎么接。"""
+    return (f"这份 .doc 有 {size_bytes / 1_000_000:.1f}MB，超过 5MB：脚本不自动转换——LibreOffice 转大文件"
+            "可能很久都转不完（实测一份 26.7MB 的跑满 28 分钟没转出来），另想办法转又容易丢表格和"
+            "版式。\n"
+            "请用户在 Word/WPS 里打开原文件另存为 .docx，这一步不要替用户自动化。\n"
+            + next_step)
+
+
+def _doc_too_big(path) -> bool:
+    """这份 .doc 是否超过自动转换的大小线；取不到大小就当没超，照常走后面的判断。"""
+    try:
+        return os.stat(path).st_size > _DOC_AUTO_LIMIT
+    except OSError:
+        return False
+
+
+# LibreOffice 转换的时限，与超时之后的处置（用户 2026-11-27 定：转换超时就 kill 掉，然后提醒用户）。
+# 起因是真机上一份 .doc 让 LibreOffice 的排版陷进死循环：进程占满一个核、永不结束。两个要点：
+# ①杀要杀整棵进程树——soffice 启动器在 Linux／Windows 上只是外壳，真正干活的是它拉起来的
+# soffice.bin，只杀外壳会把干活的留在后台继续空转；②提醒的是用户不是模型——真机上模型被请去
+# 「换一种办法」，交回来的是把文字抽出来重新拼的、丢光版式的 docx。300 秒是经验值：本机 10 份
+# 能转的真实 .doc 最慢 38 秒，转不出的那一份 28 分钟也没出来。这一段同样三份逐字同口径
+# （engine_smoke E80 钉住）。
+_LO_TIMEOUT = 300
+
+
+class _LoTimeout(Exception):
+    """LibreOffice 转换超过时限没结束；抛出时进程树已经杀干净。"""
+
+
+def _kill_tree(proc) -> None:
+    """杀掉 proc 和它拉起来的全部子进程。POSIX 下 proc 起在独立进程组里（见 _run_lo），整组
+    SIGKILL；Windows 没有进程组信号，用 taskkill /T 按进程树强杀。哪一步出错都不抛，最后都补一刀
+    proc.kill()。"""
+    import signal
+    import subprocess
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True,
+                           timeout=30, check=False)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _run_lo(cmd: list, seconds: int):
+    """起 LibreOffice 转换并等它结束，返回 CompletedProcess（stdout／stderr 已按本机代码页宽松
+    解码，并滤掉 macOS soffice 每次先吐的系统噪音行）；超过 seconds 秒没结束就把进程树杀干净，
+    抛 _LoTimeout。起不来（找不到可执行文件等）时抛 OSError，由调用方当转换失败处理。"""
+    import subprocess
+
+    def quiet(text):
+        return "".join(ln for ln in (text or "").splitlines(keepends=True) if "Task policy set failed" not in ln)
+
+    kw = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True, "errors": "replace"}
+    if sys.platform != "win32":
+        kw["start_new_session"] = True    # 自成进程组：超时后才能整组杀，不牵连本脚本自己
+    proc = subprocess.Popen(cmd, **kw)
+    try:
+        out, err = proc.communicate(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=30)  # 回收并关掉管道；万一还有活口占着管道，也不让这里卡住
+        except Exception:  # noqa: BLE001
+            pass
+        raise _LoTimeout(seconds) from None
+    return subprocess.CompletedProcess(cmd, proc.returncode, quiet(out), quiet(err))
+
+
+def _stuck_doc_hint(what: str, next_step: str) -> str:
+    """LibreOffice 转不出这份 .doc 时给模型的提示：转换已终止，请用户自己另存，不请模型另想办法。
+    what 说这次是怎么回事（超时还是失败），next_step 说转好之后怎么接。"""
+    return (f"LibreOffice 转换这份 .doc{what}，已终止——多半是个别图片／绘图对象的数据不规范，"
+            "LibreOffice 排版排不出来，与文件大小无关。\n"
+            "请用户在 Word/WPS 里打开原文件另存为 .docx；这一步不要替用户自动化，也不要另想办法转"
+            "（把文字抽出来重新拼的 docx 会丢光表格和版式）。\n"
+            + next_step)
 
 
 def _build_review_cmd(work: Path) -> str:
@@ -361,7 +558,10 @@ def _solidify_fonts(doc: Document) -> list[str]:
             sname = (p.style.name if p.style is not None else "") or ""
         except Exception:
             sname = ""
-        face = "黑体" if any(k in sname for k in _HEADING_FONT_KEYS) else "宋体"
+        if any(k in sname for k in _HEADING_FONT_KEYS):
+            face = _lay("headings", "1", "ea", default=None) or "黑体"   # 登记了公司版式：标题的中文跟版式
+        else:
+            face = _lay("body", "ea", default=None) or "宋体"
         for r in p.runs:
             rpr = r._element.rPr
             if rpr is None:
@@ -386,11 +586,23 @@ def _solidify_fonts(doc: Document) -> list[str]:
 # ---------------------------------------------------------------- 基础版式
 
 def _set_body_indent(p) -> None:
-    """正文段 2 字符首行缩进（firstLineChars 而非固定磅，随字号缩放）。"""
+    """正文段首行缩进（firstLineChars 而非固定磅，随字号缩放）。登记了公司版式按版式的缩进来；
+    「无」也显式写零——合册收尾只给没有 w:ind 的段补缩进。"""
     ind = p._p.get_or_add_pPr().get_or_add_ind()
-    ind.set(qn("w:firstLineChars"), "200")
-    if ind.get(qn("w:firstLine")):
-        del ind.attrib[qn("w:firstLine")]
+    spec = _lay("body", "ind")
+    if spec is None:
+        ind.set(qn("w:firstLineChars"), "200")
+        if ind.get(qn("w:firstLine")):
+            del ind.attrib[qn("w:firstLine")]
+        return
+    for a in ("w:firstLine", "w:firstLineChars", "w:hanging", "w:hangingChars"):
+        if ind.get(qn(a)) is not None:
+            del ind.attrib[qn(a)]
+    if "firstChars" in spec:
+        ind.set(qn("w:firstLineChars"), str(spec["firstChars"]))
+    else:
+        ind.set(qn("w:firstLine"), str(spec.get("first", 0)))
+        ind.set(qn("w:firstLineChars"), "0")
 
 
 def _clear_first_line_indent(p) -> None:
@@ -399,6 +611,19 @@ def _clear_first_line_indent(p) -> None:
     ind = p._p.get_or_add_pPr().find(qn("w:ind"))
     if ind is not None and ind.get(qn("w:firstLineChars")):
         del ind.attrib[qn("w:firstLineChars")]
+
+
+# 内置标题族：一级 16 磅、二级与三级 14 磅、四级 12 磅，黑体加粗。基准模板的 setup_styles 与
+# 用户模板缺样式时的补建（_ensure_builtin_styles）共用这一份定义
+_HEADING_SPECS = (("Heading 1", 16), ("Heading 2", 14), ("Heading 3", 14), ("Heading 4", 12))
+
+
+def _apply_heading_spec(st, size: int) -> None:
+    st.font.name = "黑体"
+    st.font.size = Pt(size)
+    st.font.bold = True
+    st.font.color.rgb = None
+    set_east_asia(st.element, "黑体")
 
 
 def setup_styles(doc: Document) -> None:
@@ -410,14 +635,8 @@ def setup_styles(doc: Document) -> None:
     # 窄列里会退化成一字一行。缩进由 _set_body_indent 按正文段逐段设置。
     normal.paragraph_format.line_spacing = 1.5
 
-    specs = [("Heading 1", 16), ("Heading 2", 14), ("Heading 3", 14), ("Heading 4", 12)]
-    for name, size in specs:
-        st = doc.styles[name]
-        st.font.name = "黑体"
-        st.font.size = Pt(size)
-        st.font.bold = True
-        st.font.color.rgb = None
-        set_east_asia(st.element, "黑体")
+    for name, size in _HEADING_SPECS:
+        _apply_heading_spec(doc.styles[name], size)
 
     for name, size in (("Cover Title", 26), ("Cover Sub", 15)):
         try:
@@ -473,16 +692,37 @@ def _strip_body_content(doc: Document) -> None:
             body.remove(child)
 
 
-def _ensure_builtin_styles(doc: Document) -> None:
-    """用户模板缺标准标题样式时补建（编号/目录依赖它们）。"""
-    for name in ("Normal", "Heading 1", "Heading 2", "Heading 3", "Heading 4"):
+def _ensure_builtin_styles(doc: Document) -> list[str]:
+    """文档缺标准样式时补建（编号/目录依赖它们），返回补建了哪些，由调用方回显。
+    标题样式补的是内置定义（黑体加粗、按级 16/14/14/12 磅）——只建一个空样式的话章标题
+    跟着正文走、和正文一个样。真实历史标书多是没有标题样式的，拿它当模板时 SKILL 里写的
+    「缺则回落内置样式并点名」靠这里兑现（2026-11-27 真机：实测只补了空壳、也没回显）。
+    Normal 缺了只建空壳：它是别的样式的基样式，字体字号由模板的文档默认值决定。"""
+    added: list[str] = []
+    sizes = dict(_HEADING_SPECS)
+    for name in ("Normal",) + tuple(sizes):
         try:
             doc.styles[name]
         except KeyError:
             try:
-                doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH, builtin=True)
-            except Exception:
-                pass
+                st = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH, builtin=True)
+            except Exception:  # noqa: BLE001
+                continue
+            if name in sizes:
+                _apply_heading_spec(st, sizes[name])
+            added.append(name)
+    return added
+
+
+def _template_styles_note(label: str, added: list[str]) -> str:
+    """用户模板补建了样式时的回显（给模型读，由它转达用户）。"""
+    heads = [n for n in added if n != "Normal"]
+    if not heads:
+        return f"[模板标题样式] 模板 {label} 里没有 Normal 样式：已补建（正文段落都挂在它上面）"
+    return (f"[模板标题样式] 模板 {label} 里没有 {'、'.join(heads)}：已按内置样式补建"
+            "（标题为黑体加粗，一级 16 磅、二级与三级 14 磅、四级 12 磅）——这几级标题不跟模板的"
+            "正文设置走。要按公司自己的样式，请先在模板里定义这些标题样式"
+            + ("；另补建了 Normal" if "Normal" in added else ""))
 
 
 def _get_style(doc: Document, name: str):
@@ -509,19 +749,93 @@ def _rewrite_para_text(p, new_text: str) -> None:
         run.font.bold = fmt[2]
 
 
-def _clear_tool_props(doc: Document) -> None:
-    """工具产出的文档不带工具痕迹与模板遗留的作者信息。真机实测：合册产物的文档属性里
-    写着作者 python-docx、备注 generated by python-docx、创建时间 2013 年——随整本一起
-    交付出去；匿名评审时文档属性暴露身份是废标级。标题等用户填的内容项不动。"""
+_CORE_PART = "/docProps/core.xml"
+_CORE_NS = "{http://schemas.openxmlformats.org/package/2006/metadata/core-properties}"
+_DC_NS = "{http://purl.org/dc/elements/1.1/}"
+_DCTERMS_NS = "{http://purl.org/dc/terms/}"
+_XSI_TYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
+_APP_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/extended-properties}"
+_APP_RESIDUE_TAGS = ("Application", "AppVersion", "Company", "Manager", "Template", "TotalTime")
+
+
+def _props_parts(doc: Document) -> dict:
+    """docProps 各部件（core.xml / app.xml / custom.xml），没有就没有。python-docx 只给
+    API 管 core，app.xml 与 custom.xml 一直以裸 blob 随包走——Word 应用名、公司、模板名
+    与 WPS 的 ICV（云账号身份码）就藏在里面。"""
+    want = {_CORE_PART, "/docProps/app.xml", "/docProps/custom.xml"}
+    return {str(p.partname): p for p in doc.part.package.iter_parts() if str(p.partname) in want}
+
+
+def _scrub_metadata(doc: Document) -> None:
+    """落盘前把元数据清零（用户拍板：保存的时候不存入任何 metadata）——幂等，挂
+    统一落盘口 _save_doc 与 base_document 两道：
+    ①core 全字段清空（含标题/主题/关键词/类别——交付稿的属性面板全空，时间写当前），
+      contentStatus/language/identifier/version/lastPrinted 整元素摘除；
+    ②app.xml 摘掉应用名/版本/公司/管理者/模板名/总编辑时长（基准模板自带
+    「Microsoft Macintosh Word」，改历史标书还会带进原单位与原模板名）；
+    ③docProps/custom.xml 整体摘除（WPS 在这里写 ICV 云账号身份码）；
+    ④包级首页缩略图摘除（基准模板自带一张 Word 截图，随文件交出去）。
+    摘部件 = 摘包级关系：部件不可达即不落盘，[Content_Types].xml 落盘时按实存部件重建。
+    ⚠ core 一律直改 core.xml 元素树、不走 python-docx 属性 API：docxcompose 在 import
+    时就把全局 nsmap["cp"] 改成错误命名空间（docxcompose/utils.py 的 nsmap.update），
+    同进程里属性 setter 会建出命名空间错误的重复元素，脏值藏在里面、属性 API 读不到
+    也清不掉；顺带把历史文件里这类异命名空间同名的残留按本地名摘掉。"""
     try:
-        cp = doc.core_properties
-        cp.author = ""
-        cp.last_modified_by = ""
-        cp.comments = ""
-        cp.revision = 1
-        now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
-        cp.created = now
-        cp.modified = now
+        from lxml import etree
+
+        core = _props_parts(doc).get(_CORE_PART)
+        if core is not None:
+            root = (core._element if getattr(core, "_element", None) is not None
+                    else etree.fromstring(core.blob))
+            now = datetime.now(timezone.utc).replace(microsecond=0,
+                                                     tzinfo=None).strftime("%Y-%m-%dT%H:%M:%SZ")
+            for ns, tag, text in (
+                    (_DC_NS, "title", ""), (_DC_NS, "subject", ""), (_DC_NS, "creator", ""),
+                    (_CORE_NS, "keywords", ""), (_DC_NS, "description", ""),
+                    (_CORE_NS, "lastModifiedBy", ""), (_CORE_NS, "revision", "1"),
+                    (_DCTERMS_NS, "created", now), (_DCTERMS_NS, "modified", now),
+                    (_CORE_NS, "category", "")):
+                for el in root.findall(ns + tag):
+                    el.text = text
+                    if ns == _DCTERMS_NS:
+                        el.set(_XSI_TYPE, "dcterms:W3CDTF")
+            for tag in ("contentStatus", "language", "version", "lastPrinted"):
+                for el in root.findall(_CORE_NS + tag) + root.findall(_DC_NS + tag):
+                    root.remove(el)
+            ok = {_CORE_NS, _DC_NS, _DCTERMS_NS}
+            names = {"title", "subject", "creator", "keywords", "description",
+                     "lastModifiedBy", "revision", "created", "modified", "category",
+                     "contentStatus", "language", "version", "lastPrinted"}
+            for el in list(root):
+                q = etree.QName(el)
+                if q.localname in names and q.namespace not in ok:
+                    root.remove(el)
+            if getattr(core, "_element", None) is None:  # 裸 blob 部件手动回写；XmlPart 由序列化器落盘
+                core._blob = etree.tostring(root, xml_declaration=True,
+                                            encoding="UTF-8", standalone=True)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        app = _props_parts(doc).get("/docProps/app.xml")
+        if app is not None:
+            from lxml import etree
+
+            root = (app._element if getattr(app, "_element", None) is not None
+                    else etree.fromstring(app.blob))
+            for tag in _APP_RESIDUE_TAGS:
+                for el in root.findall(_APP_NS + tag):
+                    root.remove(el)
+            if getattr(app, "_element", None) is None:  # 裸 blob 部件手动回写；XmlPart 由序列化器落盘
+                app._blob = etree.tostring(root, xml_declaration=True,
+                                           encoding="UTF-8", standalone=True)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        rels = doc.part.package.rels
+        for rid in [rid for rid, rel in list(rels.items())
+                    if rel.reltype.rsplit("/", 1)[-1] in ("thumbnail", "thumbnail-picture",
+                                                          "custom-properties")]:
+            rels.pop(rid, None)
     except Exception:  # noqa: BLE001
         pass
 
@@ -537,17 +851,21 @@ def base_document(template: str | None = None) -> tuple[Document, bool]:
     if path.is_file():
         doc = Document(str(path))
         _strip_body_content(doc)
-        _ensure_builtin_styles(doc)
+        added = _ensure_builtin_styles(doc)
+        if _LAYOUT is not None and template is None:
+            apply_layout(doc, _LAYOUT)     # 登记了公司版式：页面与样式从内置基准模板现编译
         notes = ensure_cjk_theme(doc)
-        _clear_tool_props(doc)
+        _scrub_metadata(doc)
         if notes and user_template:
             print("[模板中文字体] " + "；".join(notes)
                   + f"（模板 {path.name} 的主题字体语言会顶掉显式中文字体，已归一）")
+        if added and user_template:
+            print(_template_styles_note(path.name, added))
         return doc, user_template
     if user_template:
         die(f"模板文件不存在：{path}")
     doc = Document()
-    _clear_tool_props(doc)
+    _scrub_metadata(doc)
     setup_styles(doc)
     sec = doc.sections[0]
     sec.page_width, sec.page_height = Cm(21.0), Cm(29.7)
@@ -556,13 +874,27 @@ def base_document(template: str | None = None) -> tuple[Document, bool]:
     return doc, False
 
 
-def _page_field(paragraph) -> None:
-    for tag, attrs, text in (
-        ("w:fldChar", {"w:fldCharType": "begin"}, None),
-        ("w:instrText", {"xml:space": "preserve"}, " PAGE "),
-        ("w:fldChar", {"w:fldCharType": "end"}, None),
-    ):
+_PAGE_W = {"plain": ("", ""), "x页": ("第 ", " 页"), "dash": ("— ", " —")}
+
+
+def _page_field(paragraph, pn: dict | None = None) -> None:
+    """页码域。pn 是版式里的页码写法（写法／是否带共 Y 页／字号），None 是内置口径（纯数字、9 磅）。"""
+    pn = pn or {}
+    kind = pn.get("style") or "plain"
+    pieces: list = []
+    field = lambda instr: [("w:fldChar", {"w:fldCharType": "begin"}, None),   # noqa: E731
+                           ("w:instrText", {"xml:space": "preserve"}, f" {instr} "),
+                           ("w:fldChar", {"w:fldCharType": "end"}, None)]
+    if pn.get("total") and kind == "x页":      # 「第 X 页、共 Y 页」
+        pieces += [("w:t", {}, _PAGE_W[kind][0]), *field("PAGE"), ("w:t", {}, "、共 "), *field("NUMPAGES"),
+                   ("w:t", {}, _PAGE_W[kind][1])]
+    else:
+        pieces += [("w:t", {}, _PAGE_W[kind][0]), *field("PAGE"), ("w:t", {}, _PAGE_W[kind][1])]
+    for tag, attrs, text in (pc for pc in pieces if pc[0] != "w:t" or pc[2]):
         run = paragraph.add_run()
+        if tag == "w:t":
+            run.text = text
+            continue
         el = OxmlElement(tag)
         for k, v in attrs.items():
             el.set(qn(k), v)
@@ -570,19 +902,79 @@ def _page_field(paragraph) -> None:
             el.text = text
         run._element.append(el)
     for run in paragraph.runs:
-        style_run(run, "Times New Roman", 9)
+        style_run(run, "Times New Roman", pn.get("pt") or 9)
+
+
+def _apply_registered_header(master: Document) -> None:
+    """登记的公司页眉落到整本：logo 图（按登记的原尺寸）＋文字＋横线，前置节不带（合册
+    收尾剥引用）。页码走页码写法那条线，与页眉各占一段。"""
+    hd = (_LAYOUT or {}).get("assets", {}).get("header") if _LAYOUT is not None else None
+    if not hd:
+        return
+    from docx.shared import Emu
+
+    sec = master.sections[0]
+    h = sec.header
+    h.is_linked_to_previous = False
+    for p in list(h.paragraphs)[1:]:
+        p._p.getparent().remove(p._p)
+    p = h.paragraphs[0] if h.paragraphs else h.add_paragraph()
+    for r in list(p.runs):
+        r._element.getparent().remove(r._element)
+    for im in hd.get("images") or []:
+        path = layout_home() / im["file"]
+        if not path.is_file():
+            continue
+        run = p.add_run()
+        try:
+            run.add_picture(str(path), height=Emu(im["cy"]) if im.get("cy") else None,
+                            width=Emu(im["cx"]) if im.get("cx") else Cm(1.5))
+        except Exception:  # noqa: BLE001
+            continue
+    if hd.get("text"):
+        _run_fmt(p.add_run(hd["text"]), hd)
+    p.alignment = {"两端": WD_ALIGN_PARAGRAPH.JUSTIFY, "居中": WD_ALIGN_PARAGRAPH.CENTER,
+                   "右": WD_ALIGN_PARAGRAPH.RIGHT, "分散": WD_ALIGN_PARAGRAPH.DISTRIBUTE}.get(
+                       hd.get("align"), WD_ALIGN_PARAGRAPH.CENTER)
+    if hd.get("border"):
+        pBdr = OxmlElement("w:pBdr")
+        bottom = OxmlElement("w:bottom")
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), "6")
+        pBdr.append(bottom)
+        p._p.get_or_add_pPr().append(pBdr)
+
+
+def _materialize_cover(body_dir: Path, vol_name: str, multi: bool) -> Path:
+    """登记的公司封面落成封面节文件（统一落盘口：清元数据＋记指纹），之后它就是普通
+    节文件——模型按批注把项目字段改掉，重新合册不再重复落。"""
+    src = layout_home() / ((_LAYOUT.get("assets") or {}).get("cover") or "")
+    sf = body_dir / (sanitize_name(vol_name) / "封面.docx" if multi else "封面.docx")
+    sf.parent.mkdir(parents=True, exist_ok=True)
+    _save_doc(Document(str(src)), sf)
+    return sf
 
 
 def enable_footer_pagenum(doc: Document, different_first: bool) -> None:
     sec = doc.sections[0]
     sec.different_first_page_header_footer = different_first
-    footer = sec.footer
-    p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    if _LAYOUT is not None and "pagenum" in _LAYOUT["values"] and _LAYOUT["values"]["pagenum"] is None:
+        # 版式不编页码：基准模板页脚里的页码域一并摘掉
+        for ref in sec._sectPr.findall(qn("w:footerReference")):
+            sec._sectPr.remove(ref)
+        return
+    pn = _lay("pagenum", default={}) if _LAYOUT is not None else {}
+    hf = sec.header if pn.get("where") == "页眉" else sec.footer
+    if hf is sec.header and any(pp.runs for pp in hf.paragraphs):
+        p = hf.add_paragraph()   # 公司页眉已占第一段：页码另起一段，不清掉公司内容
+    else:
+        p = hf.paragraphs[0] if hf.paragraphs else hf.add_paragraph()
+    p.alignment = {"居中": WD_ALIGN_PARAGRAPH.CENTER, "左": WD_ALIGN_PARAGRAPH.LEFT}.get(
+        pn.get("pos"), WD_ALIGN_PARAGRAPH.RIGHT)
     # 幂等：先清空段内既有内容再加域（基准模板已带页码域，重复添加会渲染成 11/22）
     for r in list(p.runs):
         r._element.getparent().remove(r._element)
-    _page_field(p)
+    _page_field(p, pn)
     if different_first:
         fp = sec.first_page_footer
         if fp.paragraphs:
@@ -821,7 +1213,7 @@ def cmd_create(args) -> None:
         # 尾部不补空段：表格引擎已保证表后有段落（防相邻表格互吞），段落结尾
         # 补空段会在合册分页后顶出空白页（真机实测一册 3 处空白页皆源于此）
     path.parent.mkdir(parents=True, exist_ok=True)
-    doc.save(str(path))
+    _save_doc(doc, path)
     tag = "已覆盖" if existed else "已建节"
     if dropped_comments:
         print(f"  （--drop-comments：已按指示丢弃原批注 {dropped_comments} 条）")
@@ -944,8 +1336,36 @@ def _grid_col_widths(blk: dict, grid_w: int, content_tw: int,
     return _fit_widths([max(300, content_tw // grid_w)] * grid_w, content_tw, mins)
 
 
+def _lay_table() -> dict:
+    """出表口径：登记了公司版式按版式（没读到的项回落内置），否则内置——全线 0.5 磅、表头灰底
+    加粗居中、宋体五号。各键：ea／ascii／pt／align（数据行）、hb／ha／shade（表头行）、border。"""
+    return _lay_table_of(_lay("table", default={}) or {})
+
+
+def _tbl_borders_el(spec: dict):
+    """表格框线（tblBorders 子元素按 schema 定序：top→left→bottom→right→insideH→insideV）。"""
+    kind, sz = spec.get("kind", "all"), int(spec.get("sz") or 4)
+    on = {"all": {"top", "left", "bottom", "right", "insideH", "insideV"}, "none": set(),
+          "three": {"top", "bottom"}, "partial": set(spec.get("sides") or [])}.get(kind, set())
+    if kind == "three" and spec.get("inner"):
+        on = on | {"insideH"}
+    borders = OxmlElement("w:tblBorders")
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        b = OxmlElement(f"w:{side}")
+        if side in on:
+            b.set(qn("w:val"), "single")
+            b.set(qn("w:sz"), str(sz))
+            b.set(qn("w:color"), "000000")
+        else:
+            b.set(qn("w:val"), "nil")
+        borders.append(b)
+    return borders
+
+
 def _make_tr(specs: list[tuple[str, int, str | None]], col_w: list[int], *,
              bold: bool, size: float, header: bool, shade: str | None) -> "OxmlElement":
+    lt = _lay_table()
+    jc_val = _ALIGN_W.get(lt["ha"] if header else lt["align"]) or "left"
     tr = OxmlElement("w:tr")
     trPr = OxmlElement("w:trPr")
     cant = OxmlElement("w:cantSplit")           # 行不跨页拆分
@@ -984,17 +1404,17 @@ def _make_tr(specs: list[tuple[str, int, str | None]], col_w: list[int], *,
         ind.set(qn("w:firstLine"), "0")
         ind.set(qn("w:firstLineChars"), "0")
         ppr.append(ind)
-        jc = OxmlElement("w:jc")
-        jc.set(qn("w:val"), "center" if header else "left")
+        jc = OxmlElement("w:jc")   # 每格各建一个：同一个元素对象往第二格里追加会被搬走，前一格就丢了
+        jc.set(qn("w:val"), jc_val)
         ppr.append(jc)
         p.append(ppr)
         r = OxmlElement("w:r")
         rpr = OxmlElement("w:rPr")
         rfonts = OxmlElement("w:rFonts")
-        rfonts.set(qn("w:ascii"), "Times New Roman")
-        rfonts.set(qn("w:eastAsia"), "宋体")
+        rfonts.set(qn("w:ascii"), lt["ascii"])
+        rfonts.set(qn("w:eastAsia"), lt["ea"])
         rpr.append(rfonts)
-        if bold or header:
+        if bold or (header and lt["hb"]):
             b = OxmlElement("w:b")
             rpr.append(b)
         sz = OxmlElement("w:sz")
@@ -1077,7 +1497,9 @@ def _emit_table_inner(doc: Document, blk: dict) -> None:
             open_cols = new_open
 
     cap = blk.get("caption")
+    cap_below, cp = False, None
     if cap:
+        cap_below = (_lay("caption", "table", default={}) or {}).get("above") is False   # 版式：表题在表下方
         cap_style = _get_style(doc, "Table Caption")
         if cap_style is not None:
             cp = doc.add_paragraph(cap, style=cap_style)
@@ -1090,7 +1512,8 @@ def _emit_table_inner(doc: Document, blk: dict) -> None:
         cp.paragraph_format.first_line_indent = Pt(0)
 
     content_tw = _content_width_twips(doc)
-    size = 10.5 if grid_w <= 6 else (9.5 if grid_w <= 8 else 9.0)
+    base_pt = _lay_table()["pt"]
+    size = base_pt if grid_w <= 6 else (max(base_pt - 1, 7.5) if grid_w <= 8 else max(base_pt - 1.5, 7))
     chars, disp = _col_profiles(hspecs, rspecs, grid_w)
     auto_w = [max(6, min(50, c)) for c in chars] if any(chars) else None
     mins = [_label_min_tw(d, size, content_tw) for d in disp]
@@ -1103,20 +1526,15 @@ def _emit_table_inner(doc: Document, blk: dict) -> None:
     tblW.set(qn("w:w"), str(content_tw))
     tblW.set(qn("w:type"), "dxa")
     tblPr.append(tblW)
-    borders = OxmlElement("w:tblBorders")
-    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
-        b = OxmlElement(f"w:{side}")
-        b.set(qn("w:val"), "single")
-        b.set(qn("w:sz"), "4")
-        b.set(qn("w:color"), "000000")
-        borders.append(b)
-    tblPr.append(borders)
+    tblPr.append(_tbl_borders_el(_lay_table()["border"]))
     layout = OxmlElement("w:tblLayout")
     layout.set(qn("w:type"), "fixed")  # 固定布局，杜绝 Word 自适应挤压
     tblPr.append(layout)
-    if compact:
-        mar = OxmlElement("w:tblCellMar")  # 宽表紧凑边距（60 twips ≈ 0.11cm）
-        for side, v in (("top", "15"), ("left", "60"), ("bottom", "15"), ("right", "60")):
+    if compact or (_lay_table()["mar"] or 108) != 108:
+        mar = OxmlElement("w:tblCellMar")
+        wide = _lay_table()["mar"] not in (None, 108)   # 版式读到非缺省边距：所有表都按它（优先于紧凑口径）
+        for side, v in (("top", "15"), ("left", str(_lay_table()["mar"]) if wide else "60"),
+                        ("bottom", "15"), ("right", str(_lay_table()["mar"]) if wide else "60")):
             m = OxmlElement(f"w:{side}")
             m.set(qn("w:w"), v)
             m.set(qn("w:type"), "dxa")
@@ -1130,12 +1548,14 @@ def _emit_table_inner(doc: Document, blk: dict) -> None:
         grid.append(gc)
     tbl.append(grid)
     if hspecs:
-        tbl.append(_make_tr(hspecs, col_w, bold=True, size=size,
-                            header=True, shade="D9D9D9"))
+        tbl.append(_make_tr(hspecs, col_w, bold=False, size=size,
+                            header=True, shade=_lay_table()["shade"]))   # 表头加不加粗由版式的「表头样式」定
     for specs in rspecs:
         tbl.append(_make_tr(specs, col_w, bold=False, size=size,
                             header=False, shade=None))
     _body_insert_before_sectpr(doc, tbl)
+    if cp is not None and cap_below:
+        tbl.addnext(cp._p)   # 版式说表题在表下方：题注挪到表后（表后空段之前）
     spacer = OxmlElement("w:p")  # 表后空段：防相邻表格互吞
     _body_insert_before_sectpr(doc, spacer)
 
@@ -1616,12 +2036,15 @@ def cmd_image(args) -> None:
     except Exception:  # noqa: BLE001
         pass
     para = doc.add_paragraph()
-    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    center = _lay("image", "center", default=True)
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER if center else WD_ALIGN_PARAGRAPH.LEFT
     para.paragraph_format.first_line_indent = Pt(0)
     if anchor is not None:
         anchor._p.addnext(para._p)
     run = para.add_run()
     stream = _normalized_image(img)
+    # 图宽：登记了公司版式且读到占版心的比例就按比例（多数历史标书的图不满版心），否则满版心
+    content_cm *= (_lay("image", "ratio", default=1.0) or 1.0)
     if stream is not None:
         shape = run.add_picture(stream, width=Cm(content_cm))
         note = "，已按 EXIF 纠正方向"
@@ -1634,7 +2057,8 @@ def cmd_image(args) -> None:
         shape.width = Cm(shape.width.cm * ratio)
     if args.caption:
         cap_para = doc.add_paragraph(args.caption)
-        cap_style = _get_style(doc, "Table Caption")
+        # 图题优先用图题样式（登记了公司版式时表题与图题可以不一样：表题居左、图题居中）
+        cap_style = _get_style(doc, "Figure Caption") or _get_style(doc, "Table Caption")
         if cap_style is not None:
             cap_para.style = cap_style
         else:
@@ -1646,7 +2070,10 @@ def cmd_image(args) -> None:
             para._p.addnext(cap_para._p)  # 题注跟在图段后
         note += "，题注已加"
     _save_doc(doc, args.path)
-    print(f"[已插图] {args.path}（{img.name}，全宽居中{note}）")
+    where = "全宽居中" if center else "全宽居左"
+    if _lay("image", "ratio", default=1.0) not in (None, 1.0):
+        where = f"{'居中' if center else '居左'}、宽 {content_cm:.1f} 厘米（按公司版式占版心 {_lay('image', 'ratio'):.0%}）"
+    print(f"[已插图] {args.path}（{img.name}，{where}{note}）")
 
 
 # ---------------------------------------------------------------- 版式压缩（compact）
@@ -1975,7 +2402,7 @@ def cmd_copy_from(args) -> None:
         else:
             body.append(clone)
         copied += 1
-    tgt_doc.save(str(tgt_path))
+    _save_doc(tgt_doc, tgt_path)
     print(f"[已拷贝] {copied} 个元素 → {tgt_path}（{src_path.name} L{lo}-L{hi}，段落/表格/图片保真）")
     if img_skipped:
         shown = "、".join(img_skipped[:6]) + ("…" if len(img_skipped) > 6 else "")
@@ -2821,6 +3248,18 @@ def _fix_first_page(master: Document) -> None:
     if fpf.paragraphs:
         fpf.paragraphs[0].add_run(" ")
 
+def _num_gap(depth: int) -> str:
+    """编号与标题之间的空白：登记了公司版式且读到「编号间隔」就按它（全角空格／半角空格／紧接）；
+    否则内置口径——章（第X章）后全角空格，其余层级半角空格。"""
+    sep = _lay("numbering", "sep", default=None)
+    return sep if sep is not None else ("\u3000" if depth == 1 else " ")
+
+
+def _chap_new_page() -> bool:
+    """每章是否另起一页：登记了公司版式按版式的「章起新页」，否则起新页。"""
+    return bool(_lay("chapter_new_page", default=True))
+
+
 def _number_scheme_leaf(depth: int, counters: dict, scheme: str) -> str:
     if scheme == "none":
         return ""
@@ -2831,12 +3270,12 @@ def _number_scheme_leaf(depth: int, counters: dict, scheme: str) -> str:
     for k in range(1, depth + 1):
         counters.setdefault(k, 1)
     if scheme == "chapter":
-        return f"第{_cn(counters[1])}章　" if depth == 1 else \
-            ".".join(str(counters[k]) for k in range(1, depth + 1)) + " "
+        return f"第{_cn(counters[1])}章{_num_gap(1)}" if depth == 1 else \
+            ".".join(str(counters[k]) for k in range(1, depth + 1)) + _num_gap(depth)
     if scheme == "gov":
         return _gov_label(depth, counters)
     # decimal
-    return ".".join(str(counters[k]) for k in range(1, depth + 1)) + " "
+    return ".".join(str(counters[k]) for k in range(1, depth + 1)) + _num_gap(depth)
 
 
 def _remap_section_ids(doc: Document, taken: set[str]) -> tuple[set[str], int]:
@@ -2896,6 +3335,10 @@ def cmd_assemble(args) -> None:
         sys.exit(2)
     multi = len(volumes) > 1
     warnings: list[str] = []
+    # 编号方案与目录层级：用户（或招标文件的要求）明说了按明说的；没说就跟登记的公司版式；都没有用内置
+    numbering = args.numbering or _lay("numbering", "scheme", default=None) or "chapter"
+    toc_depth = args.toc_depth or _lay("toc", "depth", default=None) or 3
+    body_hdr_pn = body_ftr_pn = None    # 主文档自己的页眉/页脚部件（合并后把正文节引用拨回来）
 
     for vol in volumes:
         vol["tree"] = build_tree(vol["nodes"])
@@ -2912,13 +3355,19 @@ def cmd_assemble(args) -> None:
             print(f"  ⚠️ {edited}")
         master, user_tpl = base_document(args.template)
         if not user_tpl:
+            _apply_registered_header(master)
             enable_footer_pagenum(master, different_first=True)
+            hdr = master.sections[0].header
+            ftr = master.sections[0].footer
+            body_hdr_pn = str(hdr.part.partname) if not hdr.is_linked_to_previous else None
+            body_ftr_pn = str(ftr.part.partname) if not ftr.is_linked_to_previous else None
         composer = Composer(master)
         counters: dict[int, int] = {}
         chapter_plan: list[tuple[str, int, str, bool]] = []  # (title, depth, num, in_front)
         landscape_titles: set[str] = set()  # 本册横向节文件的章标题（合册后补分节重排）
         container_files: set[Path] = set()  # 容器章同名节文件（容器分支已点名，孤儿扫描不再重复报）
         taken_ids: set[str] = set()  # 本册已占用的批注号（跨节撞号就地重排）
+        seen_chapter = False  # 首章前一律分页（版式说「章不起新页」也不让第一章贴着目录）
         # 同名叶子点名：不同章节下的同名节共用同一节文件（body/ 按 <节名>.docx 找），
         # 内容会在整本里重复出现——目录树设计常见误区，点名让用户确认
         name_counts: dict[str, int] = {}
@@ -2934,7 +3383,7 @@ def cmd_assemble(args) -> None:
         merged = 0
 
         def _emit_node(node, depth):
-            nonlocal in_front, toc_marker, merged, taken_ids
+            nonlocal in_front, toc_marker, merged, taken_ids, seen_chapter
             title = node["text"]
             if title == "封面":
                 sf = _section_file(body_dir, vol["name"], title, multi)
@@ -2943,7 +3392,19 @@ def cmd_assemble(args) -> None:
                     used_files.add(sf)
                     _strip_first_heading(master, title)
                 else:
-                    _append_simple_cover(master, vol["name"])
+                    cover_tpl = (_LAYOUT or {}).get("assets", {}).get("cover") if _LAYOUT is not None else None
+                    if cover_tpl:
+                        sf = _materialize_cover(body_dir, vol["name"], multi)
+                        composer.append(Document(str(sf)))
+                        used_files.add(sf)
+                        _strip_first_heading(master, title)
+                        fields = _lay("cover_fields", default=[]) or []
+                        warnings.append(
+                            f"封面用了登记的公司封面（已落为 {sf.as_posix()}）——里面的项目名、投标人、日期"
+                            f"还是历史标书上的；开写时先把这些字段改成本次项目的"
+                            f"{'：' + '、'.join(fields) if fields else '（规格表封面字段行没读到，逐行核一遍）'}")
+                    else:
+                        _append_simple_cover(master, vol["name"])
                 merged += 1
                 return
             if title == "目录":
@@ -2951,7 +3412,7 @@ def cmd_assemble(args) -> None:
                 toc_marker = _append_toc_marker(master)
                 merged += 1
                 return
-            num = "" if in_front else _number_scheme_leaf(depth, counters, args.numbering)
+            num = "" if in_front else _number_scheme_leaf(depth, counters, numbering)
             if node["children"]:  # 容器章：占章号、产章标题（无节文件）
                 # 容器章不并入节文件——同名节文件存在即为正文丢失前兆，专项点名
                 # （只报「节点是容器」，不报「文件不在树中」：文件与目录逐字一致时
@@ -2969,7 +3430,10 @@ def cmd_assemble(args) -> None:
                         _emit_node(child, depth + 1)
                     return
                 _append_container_heading(master, title, num,
-                                          page_break=(depth == 1 and bool(num)))
+                                          page_break=(depth == 1 and bool(num)
+                                                      and (_chap_new_page() or not seen_chapter)))
+                if depth == 1 and num:
+                    seen_chapter = True
                 chapter_plan.append((title, depth, num, in_front,
                                      str(counters[1]) if counters.get(1) else ""))
                 toc_entries.append(((num + title).strip(), depth, False))
@@ -2995,7 +3459,7 @@ def cmd_assemble(args) -> None:
                 if sub_doc.element.body.findall(".//" + qn("w:commentReference")):
                     taken_ids, n_remap = _remap_section_ids(sub_doc, taken_ids)
                 if any(st.values()) or n_remap:
-                    sub_doc.save(str(sf))
+                    _save_doc(sub_doc, sf)
                 if any(st.values()):
                     warnings.append(f"节文件「{title}」含修订痕迹/批注锚——已接受修订并清理"
                                     f"（{_fmt_stats(st)}），整本按清理后内容合并")
@@ -3008,10 +3472,13 @@ def cmd_assemble(args) -> None:
             # （2026-11-21 实测），段前分页对齐正文章的独立起页惯例
             if not _apply_chapter_number(master, title, num,
                                          page_break=(in_front and merged > 0)
-                                                     or (depth == 1 and not in_front and bool(num))):
+                                                     or (depth == 1 and not in_front and bool(num)
+                                                         and (_chap_new_page() or not seen_chapter))):
                 if exists:
                     warnings.append(f"节文件内标题与目录不一致（目录：{title}）——编号未应用，"
                                     f"改节文件标题与目录逐字一致后重新合册")
+            if depth == 1 and not in_front and num:
+                seen_chapter = True
             chapter_plan.append((title, depth, num, in_front,
                                  str(counters[1]) if counters.get(1) else ""))
             toc_entries.append(((num + title).strip(), depth, not exists))
@@ -3019,10 +3486,12 @@ def cmd_assemble(args) -> None:
 
         for top in vol["tree"]:
             _emit_node(top, 1)
+        if not user_tpl:
+            _repoint_body_refs(master, body_hdr_pn, body_ftr_pn)
         toc_end = None
         if toc_marker is not None:
-            toc_end = _fill_toc(master, toc_marker, toc_entries, args.toc_depth)
-        _restyle_all(master, chapter_plan, args.numbering, args.flat_outline)
+            toc_end = _fill_toc(master, toc_marker, toc_entries, toc_depth)
+        _restyle_all(master, chapter_plan, numbering, args.flat_outline)
         _apply_body_indents(master)
         _clear_table_cell_indents(master)
         font_notes = _solidify_fonts(master)
@@ -3044,9 +3513,8 @@ def cmd_assemble(args) -> None:
             _fix_first_page(master)  # 无目录锚点的退化路径：退回 titlePg 方案
         _shrink_trailing_blank(master)
         out_path = body_dir / out_name
-        composer.save(str(out_path))
-        write_fingerprint(out_path, "assemble")
-        print(f"[已合册] {out_path}（合并 {merged} 节，编号 {args.numbering}，"
+        _save_doc(master, out_path, "assemble")
+        print(f"[已合册] {out_path}（合并 {merged} 节，编号 {numbering}，"
               f"批注 {n_comments} 条待处理）")
         if font_notes:
             print("  [字体固化] " + "；".join(font_notes))
@@ -3056,6 +3524,36 @@ def cmd_assemble(args) -> None:
             print(f"  ⚠️ {w}")
         warnings = []
         toc_entries = []
+
+
+def _repoint_body_refs(master: Document, hdr_pn: str | None, ftr_pn: str | None) -> None:
+    """docxcompose 合并会把节文件自带的页眉页脚部件一并导入并重排引用，正文节（终节）的
+    默认引用可能落到节文件带进来的空部件上（真实回放：公司封面节文件合册后，正文页码指向
+    封件带进来的空页脚，页码整本消失）。收尾把默认引用拨回主文档自己的页眉/页脚部件。"""
+    final = master.element.body.find(qn("w:sectPr"))
+    if final is None:
+        return
+
+    def rid_of(partname: str | None):
+        if not partname:
+            return None
+        for rid, rel in master.part.rels.items():
+            if rel.is_external:
+                continue
+            try:
+                if str(rel.target_part.partname) == partname:
+                    return rid
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+
+    for tag, want in ((qn("w:headerReference"), rid_of(hdr_pn)),
+                      (qn("w:footerReference"), rid_of(ftr_pn))):
+        if want is None:
+            continue
+        for ref in final.findall(tag):
+            if ref.get(qn("w:type")) == "default":
+                ref.set(qn("r:id"), want)
 
 
 def _shrink_trailing_blank(master: Document) -> None:
@@ -3156,17 +3654,25 @@ def _body_insert_before_sectpr(master: Document, el) -> None:
 
 
 def _append_toc_marker(master: Document):
-    """目录占位标题段（条目在全部节合并后回填）；段前分页——目录不与封面同页。"""
+    """目录占位标题段（条目在全部节合并后回填）；段前分页——目录不与封面同页。
+    字体字号加粗对齐跟登记的公司版式（目录标题那一行），没登记是内置的黑体三号加粗居中。"""
     from docx.text.paragraph import Paragraph
 
     h = OxmlElement("w:p")
     _body_insert_before_sectpr(master, h)
     hp = Paragraph(h, master)
-    hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
     hp.paragraph_format.first_line_indent = Pt(0)
     hp.paragraph_format.page_break_before = True
     r = hp.add_run("目录")
-    style_run(r, "黑体", 16, True)
+    tt = _lay("toc", "title", default=None)
+    if tt:
+        _run_fmt(r, tt)
+        hp.alignment = {"两端": WD_ALIGN_PARAGRAPH.JUSTIFY, "居中": WD_ALIGN_PARAGRAPH.CENTER,
+                        "右": WD_ALIGN_PARAGRAPH.RIGHT, "分散": WD_ALIGN_PARAGRAPH.DISTRIBUTE}.get(
+                            tt.get("align"), WD_ALIGN_PARAGRAPH.LEFT)
+    else:
+        hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        style_run(r, "黑体", 16, True)
     return h
 
 
@@ -3195,6 +3701,17 @@ def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]],
     entries = [e for e in entries if e[1] <= depth_limit]
     if not entries:
         return None
+    # 引导线跟登记的公司版式（点线／短线／下划线／无）；制表位落在版心右缘——登记了版式按版心的页边距算，
+    # 没登记是内置的 14.4 厘米
+    from docx.shared import Emu
+    leader = _lay("toc", "leader", default="dot") or "dot"
+    leader_enum = {"dot": WD_TAB_LEADER.DOTS, "hyphen": WD_TAB_LEADER.DASHES,
+                   "underscore": WD_TAB_LEADER.LINES, "heavy": WD_TAB_LEADER.HEAVY}.get(leader, WD_TAB_LEADER.SPACES)
+    if _LAYOUT is not None:
+        sec = master.sections[0]
+        tab_pos = Emu(int(sec.page_width - sec.left_margin - sec.right_margin) - 90000)
+    else:
+        tab_pos = Cm(14.4)
 
     def _insert_after(el, ref):
         ref.addnext(el)
@@ -3210,8 +3727,7 @@ def _fill_toc(master: Document, marker, entries: list[tuple[str, int, bool]],
         else:  # 用户模板无 TOC 样式族 → 直排格式兜底
             entry.paragraph_format.first_line_indent = Pt(0)
             entry.paragraph_format.left_indent = Cm(0.74 * max(0, depth - 1))
-        entry.paragraph_format.tab_stops.add_tab_stop(
-            Cm(14.4), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
+        entry.paragraph_format.tab_stops.add_tab_stop(tab_pos, WD_TAB_ALIGNMENT.RIGHT, leader_enum)
         label = text + ("（另附）" if missing else "") + "\t"
         run = entry.add_run(label)
         if toc_st is None:
@@ -3346,9 +3862,13 @@ def _restyle_all(master: Document, chapters: list, scheme: str,
             # gov 小标题按公文层级续编（第 depth 层章下的标题取 gov 第 target 层形态）
             _rewrite_para_text(p, f"{_gov_label(target, sub_counters)}{p.text}")
             continue
-        sub = ".".join(str(sub_counters[k]) for k in range(depth + 1, target + 1))
+        parts = []
+        for k in range(depth + 1, target + 1):
+            sub_counters.setdefault(k, 1)   # 跳级（节文件直接用 h3、没经过 h2）：缺的中间层级按 1 续
+            parts.append(str(sub_counters[k]))
+        sub = ".".join(parts)
         prefix = arab if (depth == 1 and scheme == "chapter" and arab) else num.strip()
-        _rewrite_para_text(p, f"{prefix}.{sub} {p.text}" if sub else f"{prefix} {p.text}")
+        _rewrite_para_text(p, f"{prefix}.{sub}{_num_gap(depth)}{p.text}" if sub else f"{prefix}{_num_gap(depth)}{p.text}")
 
 
 def _merge_comments(master: Document, used_files: set[Path]) -> int:
@@ -3442,23 +3962,35 @@ def _find_soffice() -> str | None:
     return None
 
 
-def _lo_convert(soffice: str, docx_path: Path, outdir: Path, profile: Path) -> Path:
-    import subprocess
-
+def _lo_convert(soffice: str, docx_path: Path, outdir: Path, profile: Path,
+                target: str = "pdf", stuck=None) -> Path:
+    """LibreOffice 无界面转换；超时与起不来都在这里收口（超时后由 _run_lo 把进程树杀干净）。
+    stuck 是 .doc 通道给的出口——一个函数，收到「这次怎么回事」的一句话（如「 超过 300 秒
+    没转完」），返回给模型的完整提示（请用户自己另存）；没给的调用方（目录页码实测）没有
+    等价替代，用缺省文案。"""
     # 配置目录地址必须由 as_uri 生成：手工拼 file://+路径 在 Windows 上是坏地址（盘符
     # 冒号、反斜杠），路径含空格/# 也不转义——地址坏了 LibreOffice 就退回默认配置，
     # 界面版开着时转换被转交给它、本进程拿不到产物
     cmd = [soffice, "--headless", f"-env:UserInstallation={Path(profile).resolve().as_uri()}",
-           "--convert-to", "pdf", "--outdir", str(outdir), str(docx_path)]
+           "--convert-to", target, "--outdir", str(outdir), str(docx_path)]
+
+    def give_up(what: str, detail: str = "", timed_out: bool = False) -> None:
+        if stuck is not None:
+            die(stuck(what), 2)
+        die(f"LibreOffice 转 {target} 超时（{_LO_TIMEOUT}s）——可跳过本步稍后再试" if timed_out
+            else f"LibreOffice 转 {target} 失败：{detail[:200]}")
+
     try:
-        # errors="replace"：text=True 缺省严格解码，输出含本机代码页外的字节就抛异常
-        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=300)
-    except subprocess.TimeoutExpired:
-        die("LibreOffice 转 PDF 超时（300s）——可跳过本步，交付仍以 Word/WPS 导出为准")
-    pdf = outdir / (docx_path.stem + ".pdf")
-    if not pdf.is_file():
-        die(f"LibreOffice 转 PDF 失败：{(r.stdout or r.stderr).strip()[:200]}")
-    return pdf
+        r = _run_lo(cmd, _LO_TIMEOUT)
+    except _LoTimeout:
+        give_up(f" 超时（超过 {_LO_TIMEOUT} 秒没转完）", timed_out=True)
+    except OSError as exc:
+        give_up(f" 失败（LibreOffice 起不来：{exc}）", f"起不来（{exc}）")
+    out = outdir / (docx_path.stem + "." + target)
+    if not out.is_file():
+        detail = (r.stdout or r.stderr).strip()[:200] or "没产出文件，也没有任何输出"
+        give_up(f" 失败（{detail}）", detail)
+    return out
 
 
 def _norm_label(s: str) -> str:
@@ -3865,7 +4397,8 @@ def _para_no(v: str) -> int:
 
 # ---------------------------------------------------------------- 文档检查（inspect，只读）
 
-# 检查只负责发现：不改任何文件、不拦流程。结果 = 一行结论 + 一张表（位置／问题／依据／
+# 检查只负责发现：不改被检查的文件、不拦流程（--json 是显式的结果落盘，写之前过防呆）。
+# 结果 = 一行结论 + 一张表（位置／问题／依据／
 # 确定还是疑似）+ 定位行 + 已检查范围，用户要求修订时才动文件。「确定」= 判法是算术或
 # 结构事实（合价对不上、图片字节损坏）；「疑似」= 靠估算，要人看一眼（列宽折行、分辨率）。
 # 最危险的失败不是误报，是不声不响地没查：读不出的金额格、认出是报价表却一行都没验算成，
@@ -3905,8 +4438,8 @@ _FIELD_ERR_RE = re.compile(r"未找到引用源|未定义书签|Reference\s+sour
 _TOP_TOTAL_RE = re.compile(r"^\s*(合计|总计|总额|总报价|投标总价|报价总额|累计|总金额|响应报价|开标报价|项目总价)")
 _SUB_TOTAL_RE = re.compile(r"^\s*(小计)")
 _NOTE_ROW_RE = re.compile(r"^\s*(?:注|说明|备注)\s*[：:]")
-_TOOL_TRACE_RE = re.compile(r"python-docx|libreoffice|openai|anthropic|claude|chatgpt|generated\s+by|kingsoft",
-                            re.I)
+_TOOL_TRACE_RE = re.compile(r"python-docx|libreoffice|openai|anthropic|claude|chatgpt|generated\s+by"
+                            r"|kingsoft|kso|icv", re.I)
 
 
 def _sha256(path) -> str:
@@ -3930,7 +4463,9 @@ def write_fingerprint(path, by: str = "") -> None:
 
 
 def _save_doc(doc, path, by: str = "") -> None:
-    """引擎的统一落盘口：写的是整本（整本-*.docx）就顺手刷新指纹。"""
+    """引擎的统一落盘口：落盘前清零元数据（保存即无痕，写整本与写节都要走这里）；
+    写的是整本（整本-*.docx）就顺手刷新指纹。"""
+    _scrub_metadata(doc)
     doc.save(str(path))
     if Path(path).name.startswith("整本-"):
         write_fingerprint(path, by)
@@ -4728,15 +5263,49 @@ def inspect_docx(path, final=False, core_placeholders=True, props=True, label=No
         cp = doc.core_properties
         filled = [(name, (getattr(cp, attr) or "").strip()) for name, attr in
                   (("作者", "author"), ("最后修改者", "last_modified_by"), ("备注", "comments"),
-                   ("关键词", "keywords"), ("类别", "category"))]
+                   ("主题", "subject"), ("关键词", "keywords"), ("类别", "category"))]
+        app_name = ""
+        parts = _props_parts(doc)
+        app = parts.get("/docProps/app.xml")
+        if app is not None:
+            try:
+                from lxml import etree
+
+                aroot = (app._element if getattr(app, "_element", None) is not None
+                         else etree.fromstring(app.blob))
+                app_name = (aroot.findtext(_APP_NS + "Application") or "").strip()
+                for tag, name in (("Company", "单位"), ("Manager", "管理者")):
+                    v = (aroot.findtext(_APP_NS + tag) or "").strip()
+                    if v:
+                        filled.append((name, v))
+            except Exception:  # noqa: BLE001
+                pass
+        cust = parts.get("/docProps/custom.xml")
+        cust_names = []
+        if cust is not None:
+            try:
+                from lxml import etree
+
+                cust_names = [el.get("name") or "" for el in etree.fromstring(cust.blob)]
+                cust_names = [n for n in cust_names if n]
+            except Exception:  # noqa: BLE001
+                pass
         filled = [(n, v) for n, v in filled if v]
-        if not filled:
-            return
-        tool = any(_TOOL_TRACE_RE.search(v) for _n, v in filled)
-        add("doc_props", "确定" if tool else "疑似", "文档属性（文件 › 信息）",
-            "文档属性里留着工具痕迹" if tool else "文档属性里有作者或单位信息",
-            "；".join(f"{n}={v[:30]}" for n, v in filled)
-            + ("——随文件一起交出去，生成文档时要清掉" if tool else "——匿名评审时会暴露身份，递交前确认要不要清"))
+        thumb = any(rel.reltype.rsplit("/", 1)[-1] in ("thumbnail", "thumbnail-picture")
+                    for rel in doc.part.package.rels.values())
+        if filled or cust_names:
+            tool = bool(_TOOL_TRACE_RE.search(
+                "；".join(v for _n, v in filled) + " " + app_name + " " + " ".join(cust_names)))
+            where_bits = [f"{n}={v[:30]}" for n, v in filled]
+            if cust_names:
+                where_bits.append("自定义属性 " + "、".join(cust_names))
+            add("doc_props", "确定" if tool else "疑似", "文档属性（文件 › 信息）",
+                "文档属性里留着工具痕迹" if tool else "文档属性里有作者或单位信息",
+                "；".join(where_bits)
+                + ("——随文件一起交出去，生成文档时要清掉" if tool else "——匿名评审时会暴露身份，递交前确认要不要清"))
+        if thumb:
+            add("thumbnail", "疑似", "文档属性（首页缩略图）", "文件里带着首页缩略图",
+                "缩略图是生成时模板带的预览图，随文件一起交出去——生成文档时要清掉")
 
     def comments_pass():
         anchored = len(body.findall(".//" + qn("w:commentReference")))
@@ -4869,6 +5438,24 @@ def _md_cell(s, limit: int) -> str:
     return s if len(s) <= limit else s[:limit - 1] + "…"
 
 
+def _md_val(s, limit: int = 400) -> str:
+    """规格表的取值格。一格里放不下时按「；」整段地让位、写明还有几段——不在半截处截断
+    （「第 2…」这种截法读不出后面还有哪些节）。行里存的是完整取值，--json 结果里拿得到全量。
+    没有分段的超长取值照旧截断加省略号。"""
+    s = re.sub(r"\s+", " ", str(s if s is not None else "")).strip()
+    if len(s) <= limit:
+        return s.replace("|", "\\|")
+    parts = s.split("；")
+    keep = len(parts) - 1
+    while keep >= 1:
+        note = f"（另有 {len(parts) - keep} 段未列出，完整取值在 --json 结果里）"
+        head = "；".join(parts[:keep])
+        if len(head) + len(note) <= limit:
+            return (head + note).replace("|", "\\|")
+        keep -= 1
+    return s[:limit - 1] + "…"
+
+
 def _scope_text(scope: dict) -> str:
     """已检查范围——「未发现」只对这个范围成立，所以必须写出来。"""
     parts = []
@@ -4925,7 +5512,7 @@ def format_findings(findings: list[dict], n_files: int, scope: dict) -> str:
     lines = []
     if findings:
         lines.append(f"[文档检查] {n_files} 份文件：查出 {len(findings)} 处（确定 {sure}、疑似 {len(findings) - sure}）；"
-                     "本次只读，未改任何文件")
+                     "本次只读，未改被检查的文件")
         lines += ["", "| 位置 | 问题 | 依据 | 确定/疑似 |", "|---|---|---|---|"]
         for f in _table_rows(findings, n_files > 1):
             lines.append(f"| {_md_cell(f['where'], 48)} | {_md_cell(f['what'], 30)} | {_md_cell(f['basis'], 90)} | {f['level']} |")
@@ -4935,15 +5522,21 @@ def format_findings(findings: list[dict], n_files: int, scope: dict) -> str:
             lines += ["", "定位（要修订时用）：" + "；".join(anchors[:60])
                       + (f"；另有 {len(anchors) - 60} 处坐标未列出（--json 里有全部）" if len(anchors) > 60 else "")]
     else:
-        lines.append(f"[文档检查] {n_files} 份文件：未发现问题；本次只读，未改任何文件")
+        lines.append(f"[文档检查] {n_files} 份文件：未发现问题；本次只读，未改被检查的文件")
     lines += ["", f"已检查：{_scope_text(scope)}"]
     return "\n".join(lines)
 
 
 def cmd_inspect(args) -> None:
     """只读检查的命令行出口：单份/多份 docx，或 --work 整套工作区的整本。退出码恒为 0
-    （只有参数错才非 0）——检查只负责发现，拦不拦是流程的事。"""
+    （只有参数错才非 0）——检查只负责发现，拦不拦是流程的事。--json 是结果落盘路径
+    （不是开关），写之前过防呆；不给就不写任何文件。没给要检查的文件是参数错——
+    检查 0 份文件再报「未发现问题」正是最危险的那种没查。"""
     scope: dict = {}
+    if args.json:
+        inputs = _work_docx(args.work) if args.work else [Path(x) for x in args.docx]
+        guard_dump_path(args.json, inputs, ".json", "--json",
+                        hint='inspect "标书.docx" --json work/review/inspect-result.json')
     if args.work:
         findings = inspect_work(args.work, scope)
         if scope.get("no_book"):
@@ -4951,6 +5544,9 @@ def cmd_inspect(args) -> None:
             return
         print(format_findings(findings, len(scope.get("books", [])), scope).replace("[文档检查]", "[整本检查]", 1))
         files = scope.get("books", [])
+    elif not args.docx:
+        die("没给要检查的文件——docx 路径直接跟在 inspect 后面（可多份），或用 --work 指工作目录；"
+            "--json 后面跟的是结果落盘路径（.json），不是开关", 2)
     else:
         paths = [Path(x) for x in args.docx]
         for p in paths:
@@ -4965,6 +5561,2872 @@ def cmd_inspect(args) -> None:
         out.write_text(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M"), "files": files, "findings": findings},
                                   ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[结果已落盘] {out}")
+
+
+# ---------------------------------------------------------------- 公司版式（layout-read：版式规格读取，只读）
+#
+# 「按这个样式来做」场景的读取端：把用户给的 Word 版历史标书读成一张版式规格表
+# （项目｜取值｜依据｜确定/疑似）。规格表是本体——用户确认后交给后续生成批落成模板。
+# 只读：不改被读取的文件；原件不复制（历史标书里有价格与人名），只记路径与指纹。
+# --out / --json 是显式的结果落盘（写之前过防呆，guard_dump_path）。
+#
+# 读法三种：机器读（页面设置这类整份文档只有一种取法，直接采信）；看一眼（正文、标题
+# 这类可能混着当年招标要求的格式——逐段算生效格式后取多数，请用户过目）；对话定
+# （封面字段这类意图项，机器只给候选）。
+#
+# 读数一律按生效格式算：直写 → 样式链 → docDefaults → 主题。真实历史标书常把字体
+# 100% 直写在文字上、样式表里定义上百个样式却一个标题样式都不用，只看样式表会看错。
+#
+# 确定线（经验值，手头只有两份真实文档，样本多了要复核）：只有一种取值记确定；有
+# 两种以上并存时最高占比过了 75% 才记确定，否则记疑似并把前三种并列进取值。只看
+# 占比不看样本量——1/1 也记确定，样本数写在依据列里，由读表的人判断。
+#
+# 只收 .docx/.doc——PDF 读不准字体与磅值，不收。
+
+_PT_CN = ((42.0, "初号"), (36.0, "小初"), (26.0, "一号"), (24.0, "小一"), (22.0, "二号"),
+          (18.0, "小二"), (16.0, "三号"), (15.0, "小三"), (14.0, "四号"), (12.0, "小四"),
+          (10.5, "五号"), (9.0, "小五"), (7.5, "六号"), (6.5, "小六"), (5.5, "七号"), (5.0, "八号"))
+_LAYOUT_COEXIST = 0.75     # 两种以上取值并存时，最高占比过了这条线才记确定
+_BROKEN = "读取时出错"      # 规格表「依据」列的这个值＝这一行不是读数，是没能读取的记录
+_ANY = object()
+_H_CH = re.compile(r"^第\s*[0-9一二三四五六七八九十百]+\s*[章部篇]")
+_H_GOV1 = re.compile(r"^[一二三四五六七八九十百]+\s*[、]")
+_H_GOV2 = re.compile(r"^[（(]\s*[一二三四五六七八九十百]+\s*[)）]")
+_H_DEC2 = re.compile(r"^[1-9]\d*(?:\.\d+){1,3}(?![\d.])")
+_H_DEC1 = re.compile(r"^[1-9]\d*\s*[、.](?!\d)")
+_H_CIRC = re.compile(r"^[①-⑳]")
+_TOC_TITLE = re.compile(r"^目\s*录$")
+_TOC_DOTS = re.compile(r"\.{3,}\s*\d{1,4}\s*$")
+_CAP = re.compile(r"^(图|表)\s*[0-9一二三四五六七八九十]+(\s*[-–－.．]\s*[0-9]+)?")
+_F_PAGE = re.compile(r"(?<![A-Z])PAGE(?![A-Z])")
+_F_NUMPAGES = re.compile(r"(?<![A-Z])NUMPAGES(?![A-Z])")
+_F_PAGEREF = re.compile(r"(?<![A-Z])PAGEREF(?![A-Z])")
+_VAR_HINT = ("日期", "时间", "编号", "项目名称", "采购人", "招标人", "投标人", "供应商",
+             "代理机构", "正本", "副本")
+_VAR_NUM = re.compile(r"\d{4}\s*年|\d{4}\s*[-/.]\s*\d{1,2}|\d{5,}")
+_DEPTH_CN = ("一", "二", "三", "四", "五", "六", "七", "八", "九")
+_SCHEME_VAL = {"chapter": "chapter（第X章/1.1）", "gov": "gov（一、/（一）/1.）",
+               "decimal": "decimal（1/1.1）", "none": "none（不编号）"}
+_TAG_NAME = {"chapter": "第X章", "gov": "一、/（一）", "decimal": "1.1"}
+_MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+_V_IMGDATA = "{urn:schemas-microsoft-com:vml}imagedata"
+_CJK_SW = (("w:kinsoku", "避头尾", True), ("w:overflowPunct", "标点溢出边界", True),
+           ("w:topLinePunct", "行首标点压缩", False), ("w:autoSpaceDE", "中西文间距", True),
+           ("w:autoSpaceDN", "数字间距", True), ("w:wordWrap", "西文单词中间换行", False))
+_AL = {"center": "居中", "right": "右", "end": "右", "left": "左", "start": "左", "both": "两端",
+       "distribute": "分散"}
+_TBL_SIDES = (("top", "上"), ("left", "左"), ("bottom", "下"), ("right", "右"),
+              ("insideH", "内横"), ("insideV", "内竖"))
+
+
+def _cm_s(v) -> str:
+    """厘米值显成短串：2.0→2、2.5→2.5。"""
+    s = f"{round(float(v), 2):.2f}".rstrip("0").rstrip(".")
+    return s or "0"
+
+
+def _tw_cm(tw) -> str:
+    """缇→厘米短串。"""
+    return _cm_s(int(tw) / 567)
+
+
+def _pt_label(pt) -> str:
+    if pt is None:
+        return "（未设）"
+    for v, name in _PT_CN:
+        if abs(pt - v) < 0.26:
+            return f"{name}（{pt:g} 磅）"
+    return f"{pt:g} 磅"
+
+
+def _line_label(line, rule) -> str:
+    if not line:
+        return "单倍"
+    v = int(line)
+    if rule == "exact":
+        return f"固定 {v / 20:g} 磅"
+    if rule == "atLeast":
+        return f"最小 {v / 20:g} 磅"
+    m = v / 240.0
+    if abs(m - 1.0) < 0.05:
+        return "单倍"
+    return f"{m:g} 倍"
+
+
+def _pct(r: float) -> str:
+    return f"{round(r * 100, 1):g}%"
+
+
+# ---------------------------------------------------------------- 文字与结构的取法
+
+def _text_lines(p_el) -> list[str]:
+    """段落里的文字行。按换行符与文本框内段落切行；文本框在 mc:Choice 与 mc:Fallback
+    里各有一份，只读 Choice——不去重会把同一行读成两遍（真实标书封面即此形态）。"""
+    out: list[str] = []
+    buf: list[str] = []
+
+    def flush():
+        s = "".join(buf).strip()
+        buf.clear()
+        if s:
+            out.append(s)
+
+    def walk(el):
+        for ch in el:
+            tag = ch.tag
+            if tag == _MC_FALLBACK:
+                continue
+            if tag == qn("w:t"):
+                buf.append(ch.text or "")
+            elif tag == qn("w:br") and ch.get(qn("w:type")) != "page":
+                flush()
+            elif tag in (qn("w:p"), qn("w:txbxContent")):
+                flush()
+                walk(ch)
+                flush()
+            else:
+                walk(ch)
+
+    walk(p_el)
+    flush()
+    return out
+
+
+def _el_text(el) -> str:
+    if el.tag == qn("w:p"):
+        return "".join(_text_lines(el))
+    return "".join(t.text or "" for t in el.iter(qn("w:t")))
+
+
+def _layout_blocks(doc) -> list:
+    """顶层块（段落/表格），外加一层内容控件（w:sdt）里的块——Word 生成的目录常包在
+    内容控件里，按普通顶层子元素枚举会整段看不见。"""
+    out = []
+    for ch in doc.element.body.iterchildren():
+        if ch.tag in (qn("w:p"), qn("w:tbl")):
+            out.append(ch)
+        elif ch.tag == qn("w:sdt"):
+            cont = ch.find(qn("w:sdtContent"))
+            if cont is not None:
+                out.extend(c for c in cont.iterchildren() if c.tag in (qn("w:p"), qn("w:tbl")))
+    return out
+
+
+def _style_name(p_el, doc) -> str:
+    try:
+        from docx.text.paragraph import Paragraph
+        st = Paragraph(p_el, doc).style
+        return (st.name or "").strip() if st is not None else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _named_depth(name: str) -> int | None:
+    m = re.match(r"^(?:heading|标题)\s*(\d)$", name, re.I)
+    return min(int(m.group(1)), 9) if m else None
+
+
+def _toc_level(name: str) -> int | None:
+    m = re.match(r"^(?:toc|目录)\s*(\d)$", name, re.I)
+    return int(m.group(1)) if m else None
+
+
+def _has_field(el, pat) -> bool:
+    if any(pat.search(t.text or "") for t in el.iter(qn("w:instrText"))):
+        return True
+    return any(pat.search(f.get(qn("w:instr")) or "") for f in el.iter(qn("w:fldSimple")))
+
+
+def _has_tab_char(p_el) -> bool:
+    return any(r.find(qn("w:tab")) is not None for r in p_el.iter(qn("w:r")))
+
+
+def _breaks_after(el) -> bool:
+    """块自身带着结束性的分页：段内分页符或分节符。"""
+    if el.tag != qn("w:p"):
+        return False
+    if el.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is not None:
+        return True
+    return any(br.get(qn("w:type")) == "page" for br in el.iter(qn("w:br")))
+
+
+def _breaks_before(el) -> bool:
+    """块自身设了段前分页。"""
+    if el.tag != qn("w:p"):
+        return False
+    pb = el.find(f"{qn('w:pPr')}/{qn('w:pageBreakBefore')}")
+    return pb is not None and pb.get(qn("w:val")) not in ("0", "false", "off")
+
+
+def _block_sections(blocks) -> list[int]:
+    """每个顶层块属于第几节（1 起）：带分节符的段落结束一节。"""
+    out, cur = [], 1
+    for el in blocks:
+        out.append(cur)
+        if el.tag == qn("w:p") and el.find(f"{qn('w:pPr')}/{qn('w:sectPr')}") is not None:
+            cur += 1
+    return out
+
+
+def _is_toc_entry(el, doc) -> bool:
+    """目录条目的四种形态：toc 样式、页码引用域、点线页码、制表符加页码。"""
+    if el.tag != qn("w:p"):
+        return False
+    if _toc_level(_style_name(el, doc)) or _has_field(el, _F_PAGEREF):
+        return True
+    t = _el_text(el)
+    if not t or len(t) > 60:
+        return False
+    if _TOC_DOTS.search(t):
+        return True
+    return _has_tab_char(el) and bool(re.search(r"\d\s*$", t))
+
+
+def _is_list(p_el, doc) -> bool:
+    for holder in [p_el] + [st.element for st in _style_chain(p_el, doc)]:
+        ppr = holder.find(qn("w:pPr"))
+        npr = ppr.find(qn("w:numPr")) if ppr is not None else None
+        if npr is not None:
+            nid = npr.find(qn("w:numId"))
+            return nid is None or nid.get(qn("w:val")) != "0"   # numId=0 是取消编号
+    return False
+
+
+def _head_tag(text: str) -> str | None:
+    for pat, tag in ((_H_CH, "chapter"), (_H_GOV1, "gov"), (_H_GOV2, "gov"),
+                     (_H_DEC2, "decimal"), (_H_DEC1, "decimal"), (_H_CIRC, "gov")):
+        if pat.match(text):
+            return tag
+    return None
+
+
+def _dot_depth(text: str) -> int:
+    head = text.split()[0] if text.split() else ""
+    return min(head.count(".") + 1, 9)
+
+
+def _depth_of(tag: str, text: str, scheme: str) -> int:
+    if tag == "chapter":
+        return 1
+    if tag == "decimal":
+        return _dot_depth(text) if _H_DEC2.match(text) else (3 if scheme == "gov" else 2)
+    if _H_GOV1.match(text):
+        return 2 if scheme == "chapter" else 1
+    if _H_GOV2.match(text):
+        return 3 if scheme == "chapter" else 2
+    return 4
+
+
+def _count_pictures(el) -> int:
+    """图片数：a:blip（drawing）与 v:imagedata（VML），兼容分支里的那份不计。"""
+    n = 0
+    for ch in el.iter():
+        if ch.tag in (_A_NS + "blip", _V_IMGDATA) \
+                and not any(a.tag == _MC_FALLBACK for a in ch.iterancestors()):
+            n += 1
+    return n
+
+
+# ---------------------------------------------------------------- 生效格式
+
+def _theme_faces(doc) -> dict:
+    """主题字体：major/minor 的西文与东亚字形。东亚先取简体脚本字体（Hans），没有再取
+    <a:ea>。"""
+    out: dict = {}
+    for part in _theme_parts(doc):
+        try:
+            from lxml import etree
+            root = etree.fromstring(part.blob)
+        except Exception:  # noqa: BLE001
+            continue
+        for tag, key in ((_A_NS + "majorFont", "major"), (_A_NS + "minorFont", "minor")):
+            for scheme in root.iter(tag):
+                if key + "Latin" not in out:
+                    el = scheme.find(_A_NS + "latin")
+                    t = (el.get("typeface") or "").strip() if el is not None else ""
+                    if t:
+                        out[key + "Latin"] = t
+                if key + "Ea" not in out:
+                    hans = [f.get("typeface") for f in scheme.findall(_A_NS + "font")
+                            if f.get("script") == "Hans" and (f.get("typeface") or "").strip()]
+                    el = scheme.find(_A_NS + "ea")
+                    ea = (el.get("typeface") or "").strip() if el is not None else ""
+                    if hans:
+                        out[key + "Ea"] = hans[0]
+                    elif ea:
+                        out[key + "Ea"] = ea
+    return out
+
+
+def _doc_default_fonts(doc) -> dict:
+    try:
+        dd = doc.styles.element.find(qn("w:docDefaults"))
+        rpr = dd.find(qn("w:rPrDefault")).find(qn("w:rPr")) if dd is not None else None
+        rf = rpr.find(qn("w:rFonts")) if rpr is not None else None
+        return {"ea": rf.get(qn("w:eastAsia")) if rf is not None else None,
+                "ascii": rf.get(qn("w:ascii")) if rf is not None else None}
+    except Exception:  # noqa: BLE001
+        return {"ea": None, "ascii": None}
+
+
+def _fonts_of(holders, theme, defaults) -> tuple[str | None, str | None]:
+    """按 holders 顺序解析 (东亚字体, 西文字体)。同一个 rFonts 里主题属性优先于显式
+    字体（OOXML 的规定；2.1.6 中文字体链路批坐实的正是「显式黑体被主题顶掉」）。"""
+    ea = ascii_ = None
+    for rpr in holders:
+        rf = rpr.find(qn("w:rFonts")) if rpr is not None else None
+        if rf is None:
+            continue
+        if ea is None:
+            t = rf.get(qn("w:eastAsiaTheme"))
+            ea = ((theme.get(("major" if "major" in t else "minor") + "Ea")) if t else None) \
+                or rf.get(qn("w:eastAsia")) or None
+        if ascii_ is None:
+            t = rf.get(qn("w:asciiTheme"))
+            ascii_ = ((theme.get(("major" if "major" in t else "minor") + "Latin")) if t else None) \
+                or rf.get(qn("w:ascii")) or None
+        if ea and ascii_:
+            break
+    return (ea or defaults.get("ea"), ascii_ or defaults.get("ascii"))
+
+
+def _spacing_side(pprs, pt_attr: str, lines_attr: str, auto_attr: str) -> str | None:
+    """段前或段后的生效值：自动 > 行 > 磅（同时出现时前者顶掉后者），样式链取第一个
+    有设置的。没设返回 None——None 不进格式化（真实标书回放抓到的崩点）。"""
+    for ppr in pprs:
+        sp = ppr.find(qn("w:spacing"))
+        if sp is None:
+            continue
+        if sp.get(qn(auto_attr)) in ("1", "true", "on"):
+            return "自动"
+        if sp.get(qn(lines_attr)) is not None:
+            return f"{int(sp.get(qn(lines_attr))) / 100:g} 行"
+        if sp.get(qn(pt_attr)) is not None:
+            return f"{int(sp.get(qn(pt_attr))) / 20:g} 磅"
+    return None
+
+
+def _cjk_label(pprs) -> str:
+    """中文版式：逐个开关按样式链取生效值，与 Word 缺省不同的点名。这些开关写在
+    段落和样式里（几乎不写进 docDefaults），所以必须逐段走样式链。"""
+    off, on = [], []
+    for tag, label, dflt in _CJK_SW:
+        v = None
+        for ppr in pprs:
+            el = ppr.find(qn(tag))
+            if el is not None:
+                v = el.get(qn("w:val")) not in ("0", "false", "off")
+                break
+        if v is None:
+            v = dflt
+        if v and not dflt:
+            on.append(label)
+        elif dflt and not v:
+            off.append(label)
+    if not off and not on:
+        return "标准"
+    parts = []
+    if off:
+        parts.append("关闭了" + "、".join(off))
+    if on:
+        parts.append("开启了" + "、".join(on))
+    return "；".join(parts)
+
+
+def _dominant_run(p_el):
+    """段落里字数最多的那个 run——外观以它为准（上标、空格这类零碎 run 不代表性）。"""
+    best, best_n = None, 0
+    for r in p_el.iter(qn("w:r")):
+        n = len("".join(t.text or "" for t in r.iter(qn("w:t"))).strip())
+        if n > best_n:
+            best, best_n = r, n
+    return best
+
+
+def _default_para_style_id(doc) -> str | None:
+    for st in doc.styles.element.findall(qn("w:style")):
+        if st.get(qn("w:type")) in (None, "paragraph") and st.get(qn("w:default")) in ("1", "true"):
+            return st.get(qn("w:styleId"))
+    return None
+
+
+def _in_default_style(el, doc) -> bool:
+    """段落挂在正文默认样式上（没写段落样式，或写的就是文档的默认段落样式）。"""
+    ppr = el.find(qn("w:pPr"))
+    ps = ppr.find(qn("w:pStyle")) if ppr is not None else None
+    return ps is None or ps.get(qn("w:val")) == _default_para_style_id(doc)
+
+
+def _unstyled_head_note(doc, heads) -> str:
+    """标题一段都没挂命名样式时，外观从哪来说哪。「全是直接格式」不能写死——真实回放里有一份
+    技术标全篇不挂样式、文字上只写了颜色，标题的外观取自正文默认样式；写死的那句让读表的人
+    查到文字上没有格式后自相矛盾。"""
+    direct = sum(1 for h in heads if _head_direct(h["el"]))
+    if direct == len(heads):
+        return "标题全是直接格式，读数按生效格式算"
+    if direct == 0 and all(_in_default_style(h["el"], doc) for h in heads):
+        return "标题都没挂样式，外观取自正文默认样式，读数按生效格式算"
+    return f"标题都没挂标题样式，直接格式 {direct} 段、其余取自段落样式，读数按生效格式算"
+
+
+def _head_direct(el) -> bool:
+    """外观是不是直接写在文字上（字体、字号、加粗任一项写在主导 run 上）。"""
+    r = _dominant_run(el)
+    rpr = r.find(qn("w:rPr")) if r is not None else None
+    return rpr is not None and any(rpr.find(qn(t)) is not None for t in ("w:rFonts", "w:sz", "w:b"))
+
+
+def _para_fmt(p_el, doc, theme, defaults) -> dict:
+    """一个段落的生效格式。字体字号加粗取主导 run（按字数）；段落属性走样式链，
+    直写优先。没设对齐就是左对齐（Word 缺省），不替文档往「两端」上猜。"""
+    chain = _style_chain(p_el, doc)
+    best = _dominant_run(p_el)
+    rprs = [st.element.find(qn("w:rPr")) for st in chain]
+    if best is not None and best.find(qn("w:rPr")) is not None:
+        rprs.insert(0, best.find(qn("w:rPr")))
+    ea, ascii_ = _fonts_of(rprs, theme, defaults)
+    default_pt = _doc_default_pt(doc) or 10.5
+    pt = _run_size_pt(best, chain, default_pt) if best is not None else default_pt
+    bold = None
+    for rpr in rprs:
+        b = rpr.find(qn("w:b")) if rpr is not None else None
+        if b is not None:
+            bold = b.get(qn("w:val")) not in ("0", "false", "none")
+            break
+    # 段落属性走样式链，链尾是文档默认值——段后 10 磅、行距 1.15 倍常写在 docDefaults 里（Word 英文
+    # 模板的常态），样式链上都没设时它就是生效值；只走样式链会把这两种读成「无」「单倍」。
+    # 文档默认值里的 0 等于没设（Word 的内建缺省就是 0）：摘掉，免得和样式里显式写的 0 混为一谈
+    dd = doc.styles.element.find(qn("w:docDefaults"))
+    dd_ppr = dd.find(qn("w:pPrDefault")).find(qn("w:pPr")) if dd is not None else None
+    if dd_ppr is not None:
+        sp0 = dd_ppr.find(qn("w:spacing"))
+        if sp0 is not None and ("0" in (sp0.get(qn("w:before")), sp0.get(qn("w:after")))):
+            from copy import deepcopy
+            dd_ppr = deepcopy(dd_ppr)
+            sp0 = dd_ppr.find(qn("w:spacing"))
+            for a in ("w:before", "w:after", "w:beforeLines", "w:afterLines"):
+                if sp0.get(qn(a)) == "0":
+                    del sp0.attrib[qn(a)]
+    pprs = [p for p in [p_el.find(qn("w:pPr"))] + [st.element.find(qn("w:pPr")) for st in chain] + [dd_ppr]
+            if p is not None]
+    line = rule = None
+    for ppr in pprs:
+        sp = ppr.find(qn("w:spacing"))
+        if sp is not None and sp.get(qn("w:line")):
+            line, rule = sp.get(qn("w:line")), sp.get(qn("w:lineRule"))
+            break
+    ind_label, left_label = "无", "0"
+    for ppr in pprs:
+        ind = ppr.find(qn("w:ind"))
+        if ind is None:
+            continue
+        flc, fl = ind.get(qn("w:firstLineChars")), ind.get(qn("w:firstLine"))
+        if flc:
+            ind_label = f"首行 {int(flc) / 100:g} 字"
+        elif fl:
+            # 绝对值缩进按生效字号折成字（420–480 缇 @12 磅 ≈ 2 字，与 firstLineChars 同义）
+            tw = int(fl)
+            chars = round(tw / (pt * 20)) if pt else None
+            ind_label = (f"首行 {chars} 字" if chars and 1 <= chars <= 4
+                         else f"首行 {_tw_cm(tw)} 厘米")
+        if ind_label == "无" and (ind.get(qn("w:hangingChars")) or ind.get(qn("w:hanging"))):
+            ind_label = "悬挂缩进"
+        lc, lv = ind.get(qn("w:leftChars")), ind.get(qn("w:left"))
+        if lc:
+            left_label = f"{int(lc) / 100:g} 字"
+        elif lv:
+            left_label = f"{_tw_cm(lv)} 厘米"
+        break
+    al = "左"
+    for ppr in pprs:
+        jc = ppr.find(qn("w:jc"))
+        if jc is not None:
+            al = _AL.get(jc.get(qn("w:val")), "左")
+            break
+    return {"ea": ea, "ascii": ascii_, "pt": pt, "bold": bool(bold),
+            "line": _line_label(line, rule),
+            "before": _spacing_side(pprs, "w:before", "w:beforeLines", "w:beforeAutospacing"),
+            "after": _spacing_side(pprs, "w:after", "w:afterLines", "w:afterAutospacing"),
+            "ind": ind_label, "left": left_label, "al": al, "cjk": _cjk_label(pprs)}
+
+
+def _ba_label(k) -> str:
+    """段前段后标签；单边未设就只写设了的那一边。"""
+    b, a = k
+    if b is None and a is None:
+        return "无"
+    out = []
+    if b is not None:
+        out.append("段前自动" if b == "自动" else f"段前 {b}")
+    if a is not None:
+        out.append("段后自动" if a == "自动" else f"段后 {a}")
+    return "、".join(out)
+
+
+def _sp_label(k) -> str:
+    return f"行距 {k[0]}、{_ba_label((k[1], k[2]))}"
+
+
+def _fmt_str(f) -> str:
+    s = f"中文{f['ea'] or '（默认）'}"
+    if f.get("ascii"):
+        s += f"、西文 {f['ascii']}"
+    if f.get("pt"):
+        s += f"｜{_pt_label(f['pt'])}"
+    if f.get("bold"):
+        s += "｜加粗"
+    return s + f"｜{f['al']}"
+
+
+def _font_key(f) -> tuple:
+    return (f["ea"], f["ascii"], f["pt"], f["bold"], f["al"])
+
+
+def _fk_label(k) -> str:
+    """字体键元组 → 取值标签（取多数时标签函数拿到的是键，不是格式字典）。"""
+    ea, asc, pt, bold, al = k
+    s = f"中文{ea or '（默认）'}"
+    if asc:
+        s += f"、西文 {asc}"
+    if pt:
+        s += f"｜{_pt_label(pt)}"
+    if bold:
+        s += "｜加粗"
+    return s + f"｜{al}"
+
+
+# ---------------------------------------------------------------- 取多数
+
+def _vote(keys, label_of, basis_name):
+    """逐段取值后取多数，返回 (取值, 依据, 是否确定)。只有一种取值记确定；两种以上
+    并存时最高占比过了 _LAYOUT_COEXIST 才记确定，否则记疑似并把前三种并列进取值。"""
+    cnt = Counter(keys)
+    if not cnt:
+        return None
+    common = cnt.most_common()
+    total = sum(cnt.values())
+    ratio = common[0][1] / total
+    basis = f"{basis_name} {common[0][1]}/{total}（{_pct(ratio)}）"
+    if len(cnt) == 1 or ratio >= _LAYOUT_COEXIST:
+        return label_of(common[0][0]), basis, True
+    alts = " ／ ".join(label_of(k) for k, _ in common[:3])
+    return alts, basis + f"，{len(cnt)} 种并存", False
+
+
+class _Rows:
+    """规格表的行：(组, 项目, 取值, 依据, 确定/疑似)。"""
+
+    def __init__(self):
+        self.items: list[tuple[str, str, str, str, str]] = []
+
+    def add(self, grp, item, val, basis, sure):
+        self.items.append((grp, item, val, basis, "确定" if sure else "疑似"))
+
+    def vote(self, grp, item, keys, label_of, basis_name):
+        v = _vote(keys, label_of, basis_name)
+        if v is not None:
+            self.add(grp, item, *v)
+        return v
+
+
+# ---------------------------------------------------------------- 区域切分与编号
+
+def _split_regions(blocks, doc) -> tuple[list, list, list, list]:
+    """封面区 / 前置页 / 目录区 / 正文区。封面=首页（到第一个分页或分节符为止，没有
+    分页就到目录为止）；目录区=「目录」标题（或首条目录条目）到末条目录条目。真实
+    标书的封面和目录之间夹着一页评分索引表：它既不是封面也不是目录，落在前置页，
+    三个区都不进正文统计。"""
+    paras = [i for i, el in enumerate(blocks) if el.tag == qn("w:p")]
+    first_head = next((i for i in paras if _named_depth(_style_name(blocks[i], doc))), None)
+    limit = first_head if first_head is not None else len(blocks)
+    toc_title = None
+    for i in paras:
+        if i >= limit:
+            break
+        name = _style_name(blocks[i], doc).replace(" ", "").lower()
+        if _TOC_TITLE.match(_el_text(blocks[i])) or name in ("tocheading", "目录标题"):
+            toc_title = i
+            break
+    toc_idx = [i for i in paras if i < limit and _is_toc_entry(blocks[i], doc)]
+    if toc_title is not None:
+        # 还有一种形态：标题之后是纯文字条目（不带页码、不带样式），到第一个分页符为止
+        last, j = toc_title, toc_title + 1
+        while j < len(blocks):
+            el = blocks[j]
+            if el.tag != qn("w:p") or _breaks_after(el) or _breaks_before(el) \
+                    or _named_depth(_style_name(el, doc)):
+                break
+            txt = _el_text(el)
+            if txt:
+                if len(txt) > 40 or not _head_tag(_text_lines(el)[0]):
+                    break
+                last = j
+            j += 1
+        toc_idx = sorted(set(toc_idx + list(range(toc_title + 1, last + 1))))
+    if toc_title is None and not toc_idx:
+        cut = 0
+        for i, el in enumerate(blocks[:limit]):
+            if _breaks_before(el):
+                cut = i
+                break
+            if _breaks_after(el):
+                cut = i + 1
+                break
+        return blocks[:cut], [], [], blocks[cut:]
+    toc_start = min(x for x in (toc_title, toc_idx[0] if toc_idx else None) if x is not None)
+    toc_end = max(x for x in (toc_title, toc_idx[-1] if toc_idx else None) if x is not None)
+    cover_end = toc_start
+    for i, el in enumerate(blocks[:toc_start]):
+        if _breaks_before(el):
+            cover_end = i
+            break
+        if _breaks_after(el):
+            cover_end = i + 1
+            break
+    return blocks[:cover_end], blocks[cover_end:toc_start], blocks[toc_start:toc_end + 1], blocks[toc_end + 1:]
+
+
+def _numbering_root(doc):
+    for part in doc.part.package.iter_parts():
+        if str(getattr(part, "partname", "")).startswith("/word/numbering"):
+            try:
+                from lxml import etree
+                return etree.fromstring(part.blob)
+            except Exception:  # noqa: BLE001
+                return None
+    return None
+
+
+def _n_styles(doc) -> int:
+    """包里样式表定义了多少个样式；没有样式部件、读不出来都算 0。直接读包，不走 doc.styles——
+    缺样式部件时它会就地补一份默认的，那就看不出「这个文件本来没有样式」了。只认
+    /word/styles.xml 本身：同目录的 stylesWithEffects.xml 是它的副本，不能拿来充数。"""
+    for part in doc.part.package.iter_parts():
+        if re.fullmatch(r"/word/styles\d*\.xml", str(getattr(part, "partname", ""))):
+            try:
+                from lxml import etree
+                return len(etree.fromstring(part.blob).findall(qn("w:style")))
+            except Exception:  # noqa: BLE001
+                return 0
+    return 0
+
+
+def _num_lvl(root, num_id, ilvl: int):
+    num = root.find(f"{qn('w:num')}[@{qn('w:numId')}='{num_id}']")
+    aid = num.find(qn("w:abstractNumId")) if num is not None else None
+    absn = None
+    if aid is not None:
+        absn = root.find(f"{qn('w:abstractNum')}[@{qn('w:abstractNumId')}='{aid.get(qn('w:val'))}']")
+    return absn.find(f"{qn('w:lvl')}[@{qn('w:ilvl')}='{ilvl}']") if absn is not None else None
+
+
+def _num_info(p_el, doc, root) -> tuple[str, str] | None:
+    """段落生效的编号定义 (numFmt, lvlText)：直写 numPr → 样式链上的 numPr。"""
+    if root is None:
+        return None
+    for holder in [p_el] + [st.element for st in _style_chain(p_el, doc)]:
+        ppr = holder.find(qn("w:pPr"))
+        npr = ppr.find(qn("w:numPr")) if ppr is not None else None
+        if npr is None:
+            continue
+        nid = npr.find(qn("w:numId"))
+        if nid is None or nid.get(qn("w:val")) == "0":
+            return None
+        il = npr.find(qn("w:ilvl"))
+        lvl = _num_lvl(root, nid.get(qn("w:val")), int(il.get(qn("w:val"))) if il is not None else 0)
+        if lvl is None:
+            return ("", "")
+        fmt = lvl.find(qn("w:numFmt"))
+        txt = lvl.find(qn("w:lvlText"))
+        return ((fmt.get(qn("w:val")) or "decimal") if fmt is not None else "decimal",
+                (txt.get(qn("w:val")) or "") if txt is not None else "")
+    return None
+
+
+def _num_label(fmt: str, txt: str) -> str:
+    if fmt == "bullet":
+        return "项目符号"
+    shown = re.sub(r"%\d", "1", txt).strip() or "1"
+    if fmt.startswith("chinese") and shown.startswith("1"):
+        shown = "一" + shown[1:]
+    return f"编号 {shown}"
+
+
+def _classify_num(fmt: str, txt: str) -> str:
+    if "第" in txt and re.search(r"[章部篇节]", txt):
+        return "chapter"
+    if fmt.startswith("chinese") or txt.startswith("（") or txt.startswith("("):
+        return "gov"
+    return "decimal"
+
+
+def _heading_auto_scheme(doc, style_names) -> tuple[str | None, str]:
+    """标题样式绑定的自动编号（多级列表按 w:pStyle 挂到标题样式上）。取该列表第 0 级
+    的写法定形态。"""
+    root = _numbering_root(doc)
+    if root is None or not style_names:
+        return None, ""
+    ids = set()
+    for nm in style_names:
+        try:
+            ids.add(doc.styles[nm].style_id)
+        except KeyError:
+            pass
+    for absn in root.findall(qn("w:abstractNum")):
+        for lvl in absn.findall(qn("w:lvl")):
+            ps = lvl.find(qn("w:pStyle"))
+            if ps is None or ps.get(qn("w:val")) not in ids:
+                continue
+            top = absn.find(f"{qn('w:lvl')}[@{qn('w:ilvl')}='0']")
+            if top is None:
+                top = lvl
+            tf = top.find(qn("w:lvlText"))
+            fm = top.find(qn("w:numFmt"))
+            txt = (tf.get(qn("w:val")) or "") if tf is not None else ""
+            fmt = (fm.get(qn("w:val")) or "decimal") if fm is not None else "decimal"
+            return _classify_num(fmt, txt), re.sub(r"%\d", "1", txt)
+    return None, ""
+
+
+# ---------------------------------------------------------------- 页面
+
+# 节里没写纸张或页边距时 Word 按这组缺省值排版（ECMA-376 §17.6.26 pgSz、§17.6.22 pgMar）。
+# 别的转换器转出来的 docx 会整节空着（真机上一份 26MB 的 .doc 手动转出来的就是这样），
+# 原先在这里取属性取到 None 直接崩，整份读不出来。
+_PG_DEF = {"w": 12240, "h": 15840, "top": 1440, "bottom": 1440, "left": 1800, "right": 1800, "gutter": 0}
+
+
+def _sect_geom(sect) -> dict:
+    """一节的纸张与页边距（缇）。直写优先；带单位的写法（如 21cm）走 python-docx 的换算；
+    没写的取 Word 缺省值，并在 no_sz / no_mar 里记下「不是从文件里读出来的」。"""
+    sp = sect._sectPr
+    sz, mar = sp.find(qn("w:pgSz")), sp.find(qn("w:pgMar"))
+
+    def tw(el, attr, pd, dflt):
+        v = el.get(qn(attr)) if el is not None else None
+        if v is not None and v.isdigit():
+            return int(v)
+        return int(pd.twips) if pd is not None else dflt
+
+    g = {"w": tw(sz, "w:w", sect.page_width, _PG_DEF["w"]),
+         "h": tw(sz, "w:h", sect.page_height, _PG_DEF["h"]),
+         "top": tw(mar, "w:top", sect.top_margin, _PG_DEF["top"]),
+         "bottom": tw(mar, "w:bottom", sect.bottom_margin, _PG_DEF["bottom"]),
+         "left": tw(mar, "w:left", sect.left_margin, _PG_DEF["left"]),
+         "right": tw(mar, "w:right", sect.right_margin, _PG_DEF["right"]),
+         "gutter": tw(mar, "w:gutter", sect.gutter, 0)}
+    g["no_sz"] = sz is None or sz.get(qn("w:w")) is None
+    g["no_mar"] = mar is None or mar.get(qn("w:left")) is None
+    return g
+
+
+def _paper_label(g: dict) -> str:
+    landscape = g["w"] > g["h"]
+    w, h = (g["h"], g["w"]) if landscape else (g["w"], g["h"])
+    name = next((n for pw, ph, n in ((11906, 16838, "A4"), (16838, 23811, "A3"),
+                                     (8391, 11906, "A5"), (12240, 15840, "Letter"))
+                  if abs(w - pw) <= 60 and abs(h - ph) <= 60), "")
+    size = f"{name} " if name else f"{_tw_cm(w)}×{_tw_cm(h)} 厘米 "
+    return size + ("横向" if landscape else "纵向")
+
+
+def _grid_label(sect) -> str:
+    g = sect._sectPr.find(qn("w:docGrid"))
+    if g is None:
+        return "未设置（无网格）"
+    kind = g.get(qn("w:type")) or "default"
+    lp = g.get(qn("w:linePitch"))
+    if kind == "default":
+        # Word 每份文档都带 linePitch，没写 type 就是没有网格——它只是行距基准
+        return "无网格" + (f"（行距基准 {int(lp) / 20:g} 磅）" if lp and lp.isdigit() else "")
+    if kind == "snapToChars":
+        return "字符网格对齐"
+    lines = None
+    if lp and lp.isdigit():
+        gm = _sect_geom(sect)
+        lines = max(1, round((gm["h"] - gm["top"] - gm["bottom"]) / int(lp)))
+    if kind == "lines":
+        return f"行网格（每页约 {lines} 行）" if lines else "行网格"
+    if not lines:
+        return "行和字符网格"
+    cs = g.get(qn("w:charSpace"))
+    return f"行和字符网格（每页约 {lines} 行、字符间距 {cs}）" if cs else f"行和字符网格（每页约 {lines} 行）"
+
+
+def _sec_group_label(nums: list) -> str:
+    """一组节号的说法：第 2、4、6 节等 12 节（超过三个只列前三个）；第 1、2 节；第 1 节。"""
+    shown = "、".join(str(n) for n in nums[:3])
+    return f"第 {shown} 节等 {len(nums)} 节" if len(nums) > 3 else f"第 {shown} 节"
+
+
+def _page_diffs(geoms, body_no, g) -> tuple[str, int]:
+    """页面设置差异：同一种差异的节归成一组，返回 (取值, 与正文节不同的节数)。取值给全——
+    排表时一行放不下由 _md_val 按段收（真实回放：119 节里 59 个图页节设置完全相同，逐节罗列
+    被拦腰截成「第 2…」，读表的人既看不到后面有哪些节、也不知道被截掉了多少）。"""
+    groups: dict[str, list] = {}
+    for i, gi in enumerate(geoms, 1):
+        if i == body_no:
+            continue
+        sides = [f"{n} {_tw_cm(gi[k])}" for n, k in (("上", "top"), ("下", "bottom"),
+                                                      ("左", "left"), ("右", "right")) if gi[k] != g[k]]
+        if (gi["w"], gi["h"]) != (g["w"], g["h"]):
+            sides.append(f"纸张 {_paper_label(gi)}")
+        if sides:
+            desc = "、".join(sides) + ("（这一节没写页面设置，取的是缺省值）" if gi["no_sz"] or gi["no_mar"] else "")
+            groups.setdefault(desc, []).append(i)
+    total = sum(len(v) for v in groups.values())
+    if not total:
+        return "全篇各节相同", 0
+    return "；".join(f"{_sec_group_label(nums)}：{desc}" for desc, nums in groups.items()) + "（与正文节不同）", total
+
+
+def _layout_page(ctx, rows, secs, info) -> dict:
+    # 文档一个节属性都没有（个别转换器的产物）：整份算一节、页面设置全是缺省值，不在这里崩
+    geoms = [_sect_geom(s) for s in secs] or [dict(_PG_DEF, no_sz=True, no_mar=True)]
+    per = info["body_per_sec"]
+    body_no = max(per, key=per.get) if per else len(secs)   # 正文候选最多的那节=正文节
+    body_no = min(max(body_no, 1), len(geoms))
+    g = geoms[body_no - 1]
+    # 多节文档里点明「正文节」是怎么挑的——节多的文档里「正文所在第 103 节」被读成全文有 103 节过
+    where = f"正文所在第 {body_no} 节" + ("（正文段最多的一节）" if len(geoms) > 1 else "")
+    rows.add("页面", "纸张", _paper_label(g),
+             f"{where}，{_tw_cm(g['w'])}×{_tw_cm(g['h'])} 厘米"
+             + ("；这一节没写纸张，取的是 Word 缺省值" if g["no_sz"] else ""), not g["no_sz"])
+    rows.add("页面", "页边距",
+             f"上 {_tw_cm(g['top'])}、下 {_tw_cm(g['bottom'])}、左 {_tw_cm(g['left'])}、右 {_tw_cm(g['right'])} 厘米"
+             + (f"（装订线 {_tw_cm(g['gutter'])} 厘米）" if g["gutter"] else ""),
+             f"正文所在第 {body_no} 节" + ("；这一节没写页边距，取的是 Word 缺省值" if g["no_mar"] else ""),
+             not g["no_mar"])
+    diffs, n_diff = _page_diffs(geoms, body_no, g)
+    rows.add("页面", "页面设置差异", diffs,
+             f"共 {len(geoms)} 节" + (f"，其中 {n_diff} 节与正文节不同" if n_diff else "")
+             + "，逐节比对纸张与页边距", True)
+    rows.add("页面", "对称页边距", "是（双面打印时装订线落在内侧）"
+             if ctx["doc"].settings.element.find(qn("w:mirrorMargins")) is not None else "否", "文档设置", True)
+    rows.add("页面", "文档网格", _grid_label(secs[body_no - 1]) if secs else "无网格",
+             f"正文所在第 {body_no} 节", True)
+    return {"body_no": body_no, "geoms": geoms,
+            "text_tw": [max(1, x["w"] - x["left"] - x["right"] - x["gutter"]) for x in geoms]}
+
+
+def _p_bottom_border(p_el) -> bool:
+    ppr = p_el.find(qn("w:pPr"))
+    pbdr = ppr.find(qn("w:pBdr")) if ppr is not None else None
+    return pbdr is not None and pbdr.find(qn("w:bottom")) is not None
+
+
+def _header_desc(sec, ctx) -> str | None:
+    texts, sizes, align, border, imgs = [], [], None, False, 0
+    for p in sec.header.paragraphs:
+        lines = _text_lines(p._p)
+        if lines:
+            f = _para_fmt(p._p, ctx["doc"], ctx["theme"], ctx["defaults"])
+            texts.append(lines[0])
+            sizes.append(f["pt"])
+            align = align or f["al"]
+        border = border or _p_bottom_border(p._p)
+        imgs += _count_pictures(p._p)
+    if not texts and not imgs:
+        return None
+    val = ""
+    if texts:
+        val = f"文字「{texts[0][:24]}」｜{_pt_label(Counter(sizes).most_common(1)[0][0])}｜{align or '左'}"
+    if imgs:
+        val += ("、含图（logo）" if texts else "含图（logo）")
+    if border:
+        val += "、带横线"
+    return val
+
+
+def _odd_even(doc, secs) -> bool:
+    el = doc.settings.element.find(qn("w:evenAndOddHeaders"))
+    if el is None or el.get(qn("w:val")) in ("0", "false", "off"):
+        return False
+    return any(not hf.is_linked_to_previous for sec in secs
+               for hf in (sec.even_page_header, sec.even_page_footer))
+
+
+def _para_hpos(p_el, doc, text_tw: int) -> str:
+    """页码在页面上的横向位置：对齐方式；没设对齐就看制表位（「制表符 + 页码」的常见
+    写法，制表位可能定义在页脚样式里）。"""
+    pprs = [p for p in [p_el.find(qn("w:pPr"))] + [st.element.find(qn("w:pPr")) for st in _style_chain(p_el, doc)]
+            if p is not None]
+    for ppr in pprs:
+        jc = ppr.find(qn("w:jc"))
+        if jc is not None:
+            v = jc.get(qn("w:val"))
+            return "居中" if v == "center" else ("右" if v in ("right", "end") else "左")
+    if _has_tab_char(p_el):
+        stops = []
+        for ppr in pprs:
+            tabs = ppr.find(qn("w:tabs"))
+            if tabs is not None:
+                stops += [(int(tb.get(qn("w:pos"), "0")), tb.get(qn("w:val")) or "left")
+                          for tb in tabs.findall(qn("w:tab"))]
+        stops = sorted(s for s in stops if s[0] <= text_tw * 1.05)
+        if stops:
+            pos, kind = stops[-1]
+            if kind == "right" or pos >= text_tw * 0.8:
+                return "右"
+            if kind == "center" or text_tw * 0.2 < pos < text_tw * 0.8:
+                return "居中"
+    return "左"
+
+
+def _layout_header_footer(ctx, rows, secs, page) -> None:
+    doc = ctx["doc"]
+    tail = "；奇偶页不同" if _odd_even(doc, secs) else ""
+    heads = [(i, d) for i, sec in enumerate(secs, 1)
+             if not sec.header.is_linked_to_previous and (d := _header_desc(sec, ctx))]
+    if not heads:
+        rows.add("页面", "页眉", "无" + tail, f"全部 {len(secs)} 节页眉", True)
+    else:
+        first = heads[0][0]
+        spans: list = []
+        for i, d in heads:
+            if spans and spans[-1][2] == d and spans[-1][1] == i - 1:
+                spans[-1][1] = i
+            else:
+                spans.append([i, i, d])
+        val = "；".join(f"第 {a}{'–' + str(b) if b > a else ''} 节：{d}" for a, b, d in spans)
+        if first > 1:
+            val += f"（第 1–{first - 1} 节无）"
+        rows.add("页面", "页眉", val + tail, "逐节读页眉（继承前一节的不重复计）", True)
+    pns = []   # (节号, 取值, 位置)——逐节读，以正文所在节为准
+    for i, sec in enumerate(secs, 1):
+        for hf, where in ((sec.footer, "页脚"), (sec.header, "页眉"), (sec.first_page_footer, "首页页脚")):
+            if hf.is_linked_to_previous:
+                continue
+            for p in hf.paragraphs:
+                # 域一律按后代级检测——run 可能嵌在内容控件或图形容器里，fldSimple 的
+                # instr 还是属性（真实标书两种形态都有，按段落直接子级扫会读成「无页码」）
+                if not _has_field(p._p, _F_PAGE):
+                    continue
+                literal = "".join(x.text or "" for x in p._p.iter(qn("w:t")))
+                if "第" in literal and "页" in literal:
+                    style = "第 X 页"
+                elif "—" in literal or "–" in literal:
+                    style = "— X —"
+                else:
+                    style = "纯数字"
+                if _has_field(p._p, _F_NUMPAGES):
+                    style += "、共 Y 页"
+                fmt = _para_fmt(p._p, doc, ctx["theme"], ctx["defaults"])
+                # 页码是纯数字（域前后没有文字）时段落里没有文字 run，_para_fmt 取不到主导 run、
+                # 会退到文档默认字号——字号要看域 run 自己写的
+                for r in p._p.iter(qn("w:r")):
+                    szr = r.find(qn("w:rPr")).find(qn("w:sz")) if r.find(qn("w:rPr")) is not None else None
+                    if szr is not None and szr.get(qn("w:val")):
+                        fmt = dict(fmt, pt=int(szr.get(qn("w:val"))) / 2)
+                        break
+                pos = _para_hpos(p._p, doc, page["text_tw"][i - 1])
+                pns.append((i, f"{style}、{where}{pos}｜{_pt_label(fmt['pt'])}", f"{where}{pos}"))
+                break
+            if pns and pns[-1][0] == i:
+                break
+    if not pns:
+        rows.add("页面", "页码写法", "无页码", f"全部 {len(secs)} 节页眉页脚", True)
+    else:
+        body_no = page["body_no"]
+        main = next((x for x in pns if x[0] == body_no), None)
+        if main is None:
+            # 正文节没单独定义页眉页脚：沿用前面最近一个定义（Word 的「链接到前一节」）；前面一个
+            # 都没有，就是正文节没有页码。改前这里落到第一个有页码的节、依据却照写「正文所在第 N 节」
+            # ——真实回放：正文在第 103 节，依据写成「正文所在第 1 节」，同一张表里自相矛盾
+            before = [x for x in pns if x[0] < body_no]
+            main = before[-1] if before else pns[0]
+        first = pns[0][0]
+        if main[0] == body_no:
+            head_txt = f"页码域（正文所在第 {body_no} 节"
+            val = main[1]
+        elif main[0] < body_no:
+            head_txt = f"页码域（正文所在第 {body_no} 节沿用第 {main[0]} 节的页脚"
+            val = main[1]
+        else:
+            head_txt = f"页码域（正文所在第 {body_no} 节没有页码；下面是第 {main[0]} 节的写法"
+            val = f"正文所在节没有页码（第 {main[0]} 节起才有：{main[1]}）"
+        others = [x for x in pns if x[0] != main[0] and x[2] != main[2]]
+        if others and main[0] <= body_no:
+            val += "（" + "、".join(f"第 {x[0]} 节{x[2]}" for x in others[:3]) + "）"
+        basis = head_txt
+        basis += (f"；第 {first} 节起才有，第 1 节无）" if first == 2
+                  else f"；第 {first} 节起才有，第 1–{first - 1} 节无）") if first > 1 else "）"
+        rows.add("页面", "页码写法", val + tail, basis, True)
+    other = None
+    for i, sec in enumerate(secs, 1):
+        if sec.footer.is_linked_to_previous:
+            continue
+        for p in sec.footer.paragraphs:
+            if _el_text(p._p) and not _has_field(p._p, _F_PAGE):
+                other = (i, _el_text(p._p))
+                break
+        if other:
+            break
+    rows.add("页面", "页脚其他文字", f"文字「{other[1][:24]}」" if other else "无",
+             f"第 {other[0]} 节页脚" if other else "全部节页脚", True)
+
+
+# ---------------------------------------------------------------- 正文
+
+def _collect_body(ctx, body, sec_of_el) -> dict:
+    """正文区分类：标题候选（命名标题样式，或自带编号的短段）、正文候选（30 字以上的
+    非列表段）、列表段。目录条目不在这里——区域切分时已经分出去。"""
+    doc = ctx["doc"]
+    num_root = _numbering_root(doc)
+    info = {"body_fmts": [], "body_per_sec": Counter(), "heads": [], "list_infos": [],
+            "n_list": 0, "gaps": Counter(), "fonts": Counter()}
+    empties, seen = 0, False
+    for el in body:
+        if el.tag != qn("w:p"):
+            continue
+        if not _el_text(el):
+            if seen:
+                empties += 1
+            continue
+        if seen:
+            info["gaps"][min(empties, 2)] += 1
+        seen, empties = True, 0
+        lines = _text_lines(el)
+        text = "".join(lines)
+        depth = _named_depth(_style_name(el, doc))
+        # 标题样式常绑着自动编号（多级列表）——那是标题不是列表，不算列表段
+        is_list = depth is None and _is_list(el, doc)
+        if is_list:
+            info["n_list"] += 1
+            ni = _num_info(el, doc, num_root)
+            if ni:
+                info["list_infos"].append(ni)
+        tag = None if is_list else _head_tag(lines[0])
+        if tag and len(text) > 40:
+            tag = None   # 带编号的长段是正文条款，不是标题
+        fmt = None
+        if depth is None and tag:
+            fmt = _para_fmt(el, doc, ctx["theme"], ctx["defaults"])
+            # 手打编号的短段里混着真标题和条款：标题不以句末标点收尾；不加粗又超过
+            # 20 字的是条款（真实招标文件里「N.」开头的 75 个短段近半是条款）
+            if text[-1] in "。；;！？" or (not fmt["bold"] and len(text) > 20):
+                tag = None
+        if depth is not None or tag:
+            info["heads"].append({"lvl": depth, "named": depth is not None, "tag": tag,
+                                  "text": lines[0], "el": el, "style": _style_name(el, doc),
+                                  "fmt": fmt or _para_fmt(el, doc, ctx["theme"], ctx["defaults"])})
+        elif len(text) >= 30 and not is_list:
+            fmt = _para_fmt(el, doc, ctx["theme"], ctx["defaults"])
+            info["body_fmts"].append(fmt)
+            info["body_per_sec"][sec_of_el.get(el, 1)] += 1
+    for f in info["body_fmts"] + [h["fmt"] for h in info["heads"]]:
+        info["fonts"][f["ea"] or ctx["defaults"].get("ea") or "未设"] += 1
+    return info
+
+
+def _layout_body(ctx, rows, info) -> None:
+    bf = info["body_fmts"]
+    if not bf:
+        for item in ("正文字体", "正文字号", "行距", "段前段后", "缩进", "对齐", "中文版式"):
+            rows.add("正文", item, "未发现正文候选段（30 字以上的非列表段）", "正文区", False)
+    else:
+        rows.vote("正文", "正文字体", [(f["ea"], f["ascii"]) for f in bf],
+                  lambda k: f"中文{k[0] or '（默认）'}、西文 {k[1] or '（同中文）'}", "正文候选")
+        rows.vote("正文", "正文字号", [f["pt"] for f in bf], _pt_label, "正文候选")
+        rows.vote("正文", "行距", [f["line"] for f in bf], lambda k: k, "正文候选")
+        rows.vote("正文", "段前段后", [(f["before"], f["after"]) for f in bf], _ba_label, "正文候选")
+        rows.vote("正文", "缩进", [f["ind"] for f in bf], lambda k: k, "正文候选")
+        rows.vote("正文", "对齐", [f["al"] for f in bf], lambda k: k, "正文候选")
+        rows.vote("正文", "中文版式", [f["cjk"] for f in bf], lambda k: k, "正文候选")
+    n_list, lis = info["n_list"], info["list_infos"]
+    if n_list:
+        top = Counter(_num_label(f, t) for f, t in lis).most_common(1)
+        val = f"自动编号 {n_list} 段" + (f"，以 {top[0][0]} 为主" if top else "")
+    else:
+        val = "未见自动编号段落"
+    rows.add("正文", "列表习惯", val + "（列表样式随拷入的原件走，不落模板）", "正文区", True)
+    gaps = info["gaps"]
+    habit = "段间常空 1 行以上" if (gaps[1] + gaps[2]) > gaps[0] else "段间不空行"
+    rows.add("正文", "空行习惯", habit + "（记录，不落模板）", f"正文区段间 {sum(gaps.values())} 处", True)
+
+
+# ---------------------------------------------------------------- 目录
+
+def _toc_guess_level(text: str) -> int:
+    if _H_CH.match(text):
+        return 1
+    if _H_DEC2.match(text):
+        return _dot_depth(text)
+    if _H_GOV1.match(text):
+        return 2
+    if _H_GOV2.match(text):
+        return 3
+    return 1
+
+
+def _toc_leader(el, doc, text: str) -> str:
+    """条目与页码之间的引导线：制表位前导符（样式里的也算）、点线字符、或没有。"""
+    pprs = [el.find(qn("w:pPr"))] + [st.element.find(qn("w:pPr")) for st in _style_chain(el, doc)]
+    names = {"dot": "点线", "middleDot": "点线", "hyphen": "短线", "underscore": "下划线", "heavy": "粗线"}
+    for ppr in pprs:
+        tabs = ppr.find(qn("w:tabs")) if ppr is not None else None
+        if tabs is None:
+            continue
+        for t in tabs.findall(qn("w:tab")):
+            ld = t.get(qn("w:leader"))
+            if ld and ld != "none":
+                return "制表位引导线（" + names.get(ld, ld) + "）"
+    if _TOC_DOTS.search(text):
+        return "点线字符"
+    return "制表位、无引导线" if _has_tab_char(el) else "无"
+
+
+def _toc_info(toc_blocks, ctx) -> dict:
+    doc = ctx["doc"]
+    info = {"title": None, "entries": []}
+    for el in toc_blocks:
+        if el.tag != qn("w:p"):
+            continue
+        lines = _text_lines(el)
+        text = "".join(lines)
+        if not text:
+            continue
+        name = _style_name(el, doc).replace(" ", "").lower()
+        if info["title"] is None and (_TOC_TITLE.match(text) or name in ("tocheading", "目录标题")):
+            info["title"] = _para_fmt(el, doc, ctx["theme"], ctx["defaults"])
+            continue
+        info["entries"].append({"lvl": _toc_level(_style_name(el, doc)) or _toc_guess_level(lines[0]),
+                                "text": lines[0], "fmt": _para_fmt(el, doc, ctx["theme"], ctx["defaults"]),
+                                "lead": _lead_spaces(el), "leader": _toc_leader(el, doc, text)})
+    return info
+
+
+def _lead_spaces(p_el) -> str:
+    """条目文字开头的空格（全角、半角、制表符）。_text_lines 会把行首行尾的空白去掉，
+    缩进打在文字里的条目要从原始文字上取。"""
+    raw = "".join(t.text or "" for t in p_el.iter(qn("w:t")))[:40]
+    m = re.match(r"^[\u3000\u00a0 \t]+", raw)
+    return m.group(0) if m else ""
+
+
+def _layout_toc(rows, toc_info) -> None:
+    rows.add("目录", "目录标题", _fmt_str(toc_info["title"]) if toc_info["title"] else "未发现目录标题",
+             "「目录」标题段" if toc_info["title"] else "—", toc_info["title"] is not None)
+    ents = toc_info["entries"]
+    if not ents:
+        rows.add("目录", "目录层级", "未发现目录条目", "—", False)
+        return
+    by: dict[int, list] = {}
+    for e in ents:
+        by.setdefault(e["lvl"], []).append(e)
+    for lvl in sorted(by):
+        name = f"目录{_DEPTH_CN[lvl - 1]}级条目" if lvl <= 4 else "目录五级及以上条目"
+        rows.vote("目录", name, [_font_key(e["fmt"]) for e in by[lvl]], _fk_label, name)
+    shown = sorted(by)[:4]
+    rows.add("目录", "目录层级", f"{max(by)} 级",
+             f"目录条目 {len(ents)} 条（" + "、".join(f"{_DEPTH_CN[l - 1]}级 {len(by[l])}" for l in shown) + "）", True)
+    rows.vote("目录", "目录行距", [e["fmt"]["line"] for e in ents], lambda k: k, "目录条目")
+    rows.vote("目录", "目录段前段后", [(e["fmt"]["before"], e["fmt"]["after"]) for e in ents], _ba_label, "目录条目")
+    def _indent(l):
+        top = Counter(e["fmt"]["left"] for e in by[l]).most_common(1)[0][0]
+        s = f"{_DEPTH_CN[l - 1]}级 {top}" + ("" if top.endswith(("字", "米")) else " 厘米")
+        # 缩进打在条目文字里的也要读出来（手工目录的常见写法：二级条目以全角空格起头）——只看段落
+        # 缩进会读成「缩进 0 厘米」（真实回放：143 条二级条目全靠 2 个全角空格起头）
+        lead, n = Counter(e["lead"] for e in by[l]).most_common(1)[0]
+        if lead:
+            unit = "全角空格" if "\u3000" in lead else ("制表符" if "\t" in lead else "空格")
+            s += f"（{n}/{len(by[l])} 条文字以 {len(lead)} 个{unit}起头）"
+        return s
+
+    rows.add("目录", "目录缩进", "、".join(_indent(l) for l in shown), "各级条目左缩进与条目文字开头的空格", True)
+    rows.vote("目录", "目录点线", [e["leader"] for e in ents], lambda k: k, "目录条目")
+
+
+# ---------------------------------------------------------------- 标题
+
+def _level_name(depth: int) -> str:
+    return f"标题{_DEPTH_CN[depth - 1]}级" if depth <= 4 else "标题五级及以上"
+
+
+def _short_level(name: str) -> str:
+    return name[2:] if name.startswith("标题") else name
+
+
+def _layout_headings(ctx, rows, info, blocks, sec_of_el, toc_info) -> None:
+    heads = info["heads"]
+    if not heads:
+        for item in ("编号形态", "标题层级", "章起新页"):
+            rows.add("标题", item, "未发现标题", "—", False)
+        return
+    sch = Counter(h["tag"] for h in heads if h["tag"])
+    scheme = ("chapter" if sch.get("chapter")
+              else ("gov" if sch.get("gov", 0) >= sch.get("decimal", 0) else "decimal")) if sch else "none"
+    for h in heads:
+        if h["lvl"] is None:
+            h["lvl"] = _depth_of(h["tag"], h["text"], scheme) if h["tag"] else 2
+    tagged = [h for h in heads if h["tag"]]
+    named = [h for h in heads if h["named"]]
+    if len(tagged) >= max(1, 0.3 * len(heads)):
+        basis = "标题文字自带编号：" + "、".join(f"{_TAG_NAME[k]} {v}" for k, v in sch.most_common())
+        sure = scheme == "chapter" or sch[scheme] / len(tagged) >= _LAYOUT_COEXIST
+        rows.add("标题", "编号形态", _SCHEME_VAL[scheme], basis, sure)
+    else:
+        auto, txt = _heading_auto_scheme(ctx["doc"], {h["style"] for h in named})
+        if auto:
+            rows.add("标题", "编号形态", _SCHEME_VAL[auto], f"标题文字不带编号，标题样式绑定自动编号「{txt}」", True)
+        elif toc_info["entries"]:
+            shown = []
+            for e in toc_info["entries"]:
+                if e["lvl"] not in [x for x, _ in shown]:
+                    shown.append((e["lvl"], e["text"][:12]))
+            hint = _head_tag(toc_info["entries"][0]["text"]) or "decimal"
+            rows.add("标题", "编号形态", _SCHEME_VAL[hint],
+                     "标题文字不带编号，标题样式未绑定编号；目录条目显示 "
+                     + " / ".join(t for _, t in shown[:3]), False)
+        else:
+            rows.add("标题", "编号形态", _SCHEME_VAL["none"], "标题文字不带编号，标题样式也未绑定编号", True)
+    groups: dict[str, list] = {}
+    for h in heads:
+        groups.setdefault(_level_name(h["lvl"]), []).append(h["fmt"])
+    for name in ("标题一级", "标题二级", "标题三级", "标题四级", "标题五级及以上"):
+        fmts = groups.get(name)
+        if not fmts:
+            continue
+        rows.vote("标题", name, [_font_key(f) for f in fmts], _fk_label, name)
+        rows.vote("标题", name + "间距", [(f["line"], f["before"], f["after"]) for f in fmts], _sp_label, name)
+    if scheme == "chapter":
+        seps = []
+        for h in tagged:
+            if h["tag"] == "chapter":
+                mm = re.match(r"^第\s*[^章部篇]+\s*[章部篇](\s*)", h["text"])
+                if mm:
+                    s = mm.group(1)
+                    seps.append("全角空格" if "　" in s else ("半角空格" if s else "紧接"))
+        if seps:
+            rows.vote("标题", "编号间隔", seps, lambda k: k, "一级标题")
+    elif scheme == "decimal":
+        # 十进制编号（文字自带 1.1）：间隔同样读文字里编号后面的空白，按这一级的标题报
+        seps, lvls = [], []
+        for h in tagged:
+            if h["tag"] != "decimal":
+                continue
+            mm = re.match(r"^\s*[1-9]\d*(?:\.\d+)+(\s*)", h["text"])
+            if mm:
+                s = mm.group(1)
+                seps.append("全角空格" if "\u3000" in s else ("半角空格" if s else "紧接"))
+                lvls.append(h["lvl"])
+        if seps:
+            rows.vote("标题", "编号间隔", seps, lambda k: k,
+                      _short_level(_level_name(Counter(lvls).most_common(1)[0][0])) + "标题")
+    idx_of = {el: i for i, el in enumerate(blocks)}
+
+    def starts_page(h) -> bool:
+        el = h["el"]
+        if _breaks_before(el):
+            return True
+        i = idx_of.get(el)
+        if not i:
+            return False
+        prev = blocks[i - 1]   # 分页符常落在上一段末尾（或上一段的空行里）
+        return _breaks_after(prev) or sec_of_el.get(prev) != sec_of_el.get(el)
+
+    # 「章」取这份文档里最浅的那一级标题。常规文档就是一级；通篇没有一级的（章用「1、」
+    # 编号、或只用了标题 2 样式——真机上的资格文件、报价文件就是）没有可取的首元素，原先在
+    # 这里 IndexError 整份读不出。退到最浅一级照实读，「没识别出一级」写进依据并记疑似。
+    top = min(h["lvl"] for h in heads)
+    ones = [h for h in heads if h["lvl"] == top]
+    first_np = starts_page(ones[0])
+    rest = ones[1:]
+    k = sum(1 for h in rest if starts_page(h))
+    if not rest or k == len(rest) or (rest and k / len(rest) >= _LAYOUT_COEXIST):
+        val, sure = "是", True
+    elif k == 0:
+        val, sure = "否", True
+    else:
+        val, sure = f"部分（{k}/{len(rest)}）", False
+    stat = f"首章前{'有' if first_np else '无'}分页，其余 {len(rest)} 处里 {k} 处起新页"
+    if top == 1:
+        basis = f"一级标题 {len(ones)} 处：{stat}"
+    else:
+        basis, sure = f"没识别出一级标题，按最浅的标题{_DEPTH_CN[max(top, 1) - 1]}级 {len(ones)} 处看：{stat}", False
+    rows.add("标题", "章起新页", val, basis, sure)
+    rows.add("标题", "标题层级", f"用到 {max(h['lvl'] for h in heads)} 级", f"标题候选 {len(heads)} 处", True)
+
+
+# ---------------------------------------------------------------- 表格
+
+def _table_style_defs(doc, style_id) -> dict:
+    """表格样式链（basedOn 逐级）上第一个有定义的边框、首行底纹、首行加粗、单元格边距。"""
+    out = {"borders": None, "shd": None, "bold": False, "mar": None}
+    styles_el = doc.styles.element
+    sid, guard = style_id, 0
+    while sid and guard < 8:
+        guard += 1
+        st = styles_el.find(f"{qn('w:style')}[@{qn('w:styleId')}='{sid}']")
+        if st is None:
+            break
+        tp = st.find(qn("w:tblPr"))
+        if tp is not None:
+            if out["borders"] is None and tp.find(qn("w:tblBorders")) is not None:
+                out["borders"] = tp.find(qn("w:tblBorders"))
+            if out["mar"] is None and tp.find(qn("w:tblCellMar")) is not None:
+                out["mar"] = tp.find(qn("w:tblCellMar"))
+        for cf in st.findall(qn("w:tblStylePr")):
+            if cf.get(qn("w:type")) != "firstRow":
+                continue
+            tcpr = cf.find(qn("w:tcPr"))
+            shd = tcpr.find(qn("w:shd")) if tcpr is not None else None
+            fill = (shd.get(qn("w:fill")) or "").upper() if shd is not None else ""
+            if fill and fill not in ("AUTO", "FFFFFF"):
+                out["shd"] = fill
+            rpr = cf.find(qn("w:rPr"))
+            b = rpr.find(qn("w:b")) if rpr is not None else None
+            if b is not None and b.get(qn("w:val")) not in ("0", "false"):
+                out["bold"] = True
+        base = st.find(qn("w:basedOn"))
+        sid = base.get(qn("w:val")) if base is not None else None
+    return out
+
+
+def _cell_mar(mar_el, side: str) -> int | None:
+    el = mar_el.find(qn("w:" + side)) if mar_el is not None else None
+    v = el.get(qn("w:w")) if el is not None else None
+    return int(v) if v is not None and v.isdigit() else None
+
+
+def _layout_tables(ctx, rows, body) -> None:
+    """只统计正文区的表：封面信息栏、评分索引表这类招标规定的格式件不是公司的表样。"""
+    from docx.table import Table
+    doc = ctx["doc"]
+    kinds, hstyles, dfmts, widths, mars = [], [], [], [], []
+    fixed = cant_n = hdr_n = n = 0
+    for el in body:
+        if el.tag != qn("w:tbl"):
+            continue
+        n += 1
+        tblpr = el.tblPr
+        st_el = tblpr.find(qn("w:tblStyle")) if tblpr is not None else None
+        sd = _table_style_defs(doc, st_el.get(qn("w:val")) if st_el is not None else None)
+        sides = {}
+        for side, _cn in _TBL_SIDES:
+            d = tblpr.find(f"{qn('w:tblBorders')}/{qn('w:' + side)}") if tblpr is not None else None
+            src = d if d is not None else (sd["borders"].find(qn("w:" + side)) if sd["borders"] is not None else None)
+            if src is not None:
+                sides[side] = (src.get(qn("w:val")) or "single", src.get(qn("w:sz")))
+        vis = [s for s, _cn in _TBL_SIDES if sides.get(s, ("none",))[0] not in ("none", "nil")]
+        if not sides or not vis:
+            kind = "无框线"
+        elif len(vis) == 6:
+            kind = f"全线 {max(int(v[1] or 4) for v in sides.values()) / 8:g} 磅"
+        elif set(vis) <= {"top", "bottom", "insideH"}:
+            kind = "三线表" + ("（带内横线）" if "insideH" in vis else "")
+        else:
+            kind = "部分框线（" + "、".join(cn for s, cn in _TBL_SIDES if s in vis) + "）"
+        trs = el.findall(qn("w:tr"))
+        fill_t, hb, ha = None, [], []
+        if trs:
+            for tc in trs[0].findall(qn("w:tc")):
+                shd = tc.find(f"{qn('w:tcPr')}/{qn('w:shd')}")
+                fill = (shd.get(qn("w:fill")) or "").upper() if shd is not None else ""
+                if fill and fill not in ("AUTO", "NONE", "FFFFFF"):   # 纯白底纹就是没有底纹
+                    fill_t = fill
+                for p in tc.findall(qn("w:p")):
+                    if _el_text(p):
+                        f = _para_fmt(p, doc, ctx["theme"], ctx["defaults"])
+                        hb.append(f["bold"])
+                        ha.append(f["al"])
+        look = tblpr.find(qn("w:tblLook")) if tblpr is not None else None
+        first_on = look is not None and look.get(qn("w:firstRow")) not in (None, "0", "false")
+        if fill_t is None and first_on:
+            fill_t = sd["shd"]
+        kinds.append(kind)
+        hstyles.append((fill_t, (all(hb) if hb else False) or (first_on and sd["bold"]),
+                        Counter(ha).most_common(1)[0][0] if ha else "左"))
+        for tr in trs[1:4]:
+            for tc in tr.findall(qn("w:tc"))[:8]:
+                for p in tc.findall(qn("w:p")):
+                    if _el_text(p):
+                        dfmts.append(_para_fmt(p, doc, ctx["theme"], ctx["defaults"]))
+        tw_el = tblpr.find(qn("w:tblW")) if tblpr is not None else None
+        w_type = tw_el.get(qn("w:type")) if tw_el is not None else None
+        w_val = tw_el.get(qn("w:w")) if tw_el is not None else None
+        if w_type == "pct" and w_val and w_val.isdigit():
+            widths.append(f"占版心 {int(w_val) / 50:g}%")
+        elif w_type == "dxa" and w_val and w_val.isdigit():
+            widths.append(f"固定 {_tw_cm(w_val)} 厘米")
+        else:
+            widths.append("自动")
+        mar_el = tblpr.find(qn("w:tblCellMar")) if tblpr is not None else None
+        if mar_el is None:
+            mar_el = sd["mar"]
+        side_v = _cell_mar(mar_el, "left")
+        if side_v is None:
+            side_v = 108   # Word 缺省 0.19 厘米
+        mars.append(f"左右 {_tw_cm(side_v)} 厘米")
+        lay = tblpr.find(qn("w:tblLayout")) if tblpr is not None else None
+        fixed += lay is not None and lay.get(qn("w:type")) == "fixed"
+        if trs and sum(1 for tr in trs if tr.find(f"{qn('w:trPr')}/{qn('w:cantSplit')}") is not None) * 2 >= len(trs):
+            cant_n += 1
+        hdr_n += bool(trs) and trs[0].find(f"{qn('w:trPr')}/{qn('w:tblHeader')}") is not None
+    if not n:
+        rows.add("表格", "表格边框", "未发现表格", "—", True)
+        return
+    rows.vote("表格", "表格边框", kinds, lambda k: k, f"表格 {n} 张")
+    def _hs_label(k):
+        s = f"底纹 {k[0]}" if k[0] else "无底纹"
+        if k[1]:
+            s += "、表头加粗"
+        if k[2] != "左":
+            s += f"、表头{k[2]}"
+        return s
+
+    rows.vote("表格", "表头样式", hstyles, _hs_label, "表头行（直接设置优先，其次表格样式）")
+    if dfmts:
+        rows.vote("表格", "表格文字", [(f["ea"], f["pt"], f["al"]) for f in dfmts],
+                  lambda k: f"中文{k[0] or '（默认）'}｜{_pt_label(k[1])}｜{k[2]}", f"数据行单元格 {len(dfmts)} 格")
+    rows.vote("表格", "表格宽度", widths, lambda k: k, f"表格 {n} 张")
+    rows.vote("表格", "单元格边距", mars, lambda k: k, f"表格 {n} 张（缺省 0.19 厘米）")
+    lay_val = "固定宽度" if fixed * 2 > n else "自动宽度"
+    if cant_n * 2 > n:
+        lay_val += "、行不跨页"
+    if hdr_n * 2 > n:
+        lay_val += "、表头跨页重复"
+    rows.add("表格", "表格布局", lay_val, f"表格 {n} 张", True)
+
+
+# ---------------------------------------------------------------- 表题、图题、图宽
+
+def _layout_figures(ctx, rows, blocks, body, sec_of_el, page) -> dict:
+    """表题、图题、图宽。只统计正文区的图与题注；题注位置看它挨着的是表还是图。"""
+    doc = ctx["doc"]
+    in_body = set(body)
+    caps = {"表": [], "图": []}
+    nums = {"表": Counter(), "图": Counter()}
+    poss = {"表": Counter(), "图": Counter()}
+    widths, centered, n_pic = [], 0, 0
+    n_tbl = 0
+    for i, el in enumerate(blocks):
+        if el not in in_body:
+            continue
+        if el.tag == qn("w:tbl"):
+            n_tbl += 1
+            continue
+        pics = _count_pictures(el)
+        if pics:
+            n_pic += pics
+            for e in el.iter(qn("wp:extent")):
+                if any(a.tag == _MC_FALLBACK for a in e.iterancestors()):
+                    continue
+                sec_no = sec_of_el.get(el, page["body_no"])
+                text_cm = page["text_tw"][min(sec_no, len(page["text_tw"])) - 1] / 567
+                widths.append((round(int(e.get("cx")) / 360000, 1), int(e.get("cx")) / 360000 / text_cm))
+                centered += _para_fmt(el, doc, ctx["theme"], ctx["defaults"])["al"] == "居中"
+        lines = _text_lines(el)
+        if not lines:
+            continue
+        m = _CAP.match(lines[0])
+        if not m:
+            continue
+        kind = m.group(1)
+        nums[kind]["N-M" if m.group(2) else "N"] += 1
+        prev, nxt = (blocks[i - 1] if i > 0 else None), (blocks[i + 1] if i + 1 < len(blocks) else None)
+        if kind == "表":
+            above = nxt is not None and nxt.tag == qn("w:tbl")
+            below = prev is not None and prev.tag == qn("w:tbl")
+        else:
+            above = nxt is not None and nxt.tag == qn("w:p") and _count_pictures(nxt) > 0
+            below = prev is not None and prev.tag == qn("w:p") and _count_pictures(prev) > 0
+        if above != below:   # 位置是看题注挨着表还是图读出来的
+            poss[kind]["表上方" if kind == "表" else "图上方"] += above
+            poss[kind]["表下方" if kind == "表" else "图下方"] += below
+            caps[kind].append(_para_fmt(el, doc, ctx["theme"], ctx["defaults"]))
+    for kind, grp in (("表", "表格"), ("图", "图")):
+        item = kind + "题"
+        if caps[kind]:
+            pos = poss[kind].most_common(1)[0][0]
+            pat = nums[kind].most_common(1)[0][0]
+            v = _vote([_font_key(f) for f in caps[kind]], _fk_label, kind + "题")
+            rows.add(grp, item, f"{pos}、{v[0]}、编号「{kind} {pat}」", v[1], v[2])
+        else:
+            where = f"表格 {n_tbl} 张" if kind == "表" else f"插图 {n_pic} 张"
+            rows.add(grp, item, f"未见{item}（记录，不落模板）", where, True)
+    if widths:
+        ratio = sum(r for _cm, r in widths) / len(widths)
+        mc = Counter(cm for cm, _r in widths).most_common(1)[0][0]
+        lead = "居中、" if centered * 2 >= len(widths) else ""
+        rows.add("图", "图宽", f"{lead}多数 {mc:g} 厘米（约为版心宽的 {ratio * 100:.0f}%）",
+                 f"插图 {len(widths)} 张（版心宽按所在节的页宽减边距）", True)
+    else:
+        rows.add("图", "图宽", "未发现插图", "—", True)
+    return {"n_tbl": n_tbl, "n_pic": n_pic}
+
+
+# ---------------------------------------------------------------- 封面
+
+def _cover_flags(text: str) -> list[str]:
+    flags = [k for k in _VAR_HINT if k in text]
+    if _VAR_NUM.search(text):
+        flags.append("数字串")
+    return sorted(set(flags))
+
+
+def _layout_cover(ctx, rows, cover, page) -> list:
+    lines, n_tbl, n_pic, n_box = [], 0, 0, 0
+    for el in cover:
+        n_pic += _count_pictures(el)
+        n_box += sum(1 for x in el.iter(qn("w:txbxContent"))
+                     if not any(a.tag == _MC_FALLBACK for a in x.iterancestors()))
+        if el.tag == qn("w:p"):
+            lines += [(t, _cover_flags(t)) for t in _text_lines(el)]
+        elif el.tag == qn("w:tbl"):
+            n_tbl += 1
+            for tr in el.findall(qn("w:tr")):
+                cells = [" ".join(" ".join(_text_lines(p)) for p in tc.findall(qn("w:p"))).strip()
+                         for tc in tr.findall(qn("w:tc"))]
+                text = " ｜ ".join(c for c in cells if c)
+                if text:
+                    lines.append(("[表格] " + text, _cover_flags(text)))
+    if not cover:
+        rows.add("封面", "封面版式", "未识别出封面区（首页之后没有分页或分节）", "—", False)
+    else:
+        rows.add("封面", "封面版式",
+                 f"整页拷贝：文字 {len(lines)} 行、表格 {n_tbl} 张、图 {n_pic} 张、文本框 {n_box} 个",
+                 "首页（到第一个分页或分节符为止）", True)
+    cats = sorted({c for _t, fl in lines for c in fl})
+    rows.add("封面", "封面字段", "、".join(cats) if cats else "未见像会变的字", "封面区逐行标记（只给候选，哪些做成字段由用户定）", True)
+    g0, gb = page["geoms"][0], page["geoms"][page["body_no"] - 1]
+    sides = [f"{n} {_tw_cm(g0[k])}" for n, k in (("上", "top"), ("下", "bottom"), ("左", "left"), ("右", "right"))
+             if g0[k] != gb[k]]
+    rows.add("封面", "封面页设置", "同正文" if not sides else "与正文不同（" + "、".join(sides) + "）",
+             "封面所在第 1 节 对比 正文所在节", True)
+    return lines
+
+
+# ---------------------------------------------------------------- 汇总与命令行
+
+def layout_read_doc(doc) -> dict:
+    """只读读取一份已打开文档的版式规格。返回 rows/facts/cover_lines/scope/warnings。"""
+    # 样式数必须最先数：后面一碰段落样式，python-docx 就会给没有样式部件的文档就地补一份
+    # 默认的，到最后再数就数不出「这个文件本来没有样式」了（真实文件回放抓到的）
+    bare = _n_styles(doc) == 0
+    ctx = {"doc": doc, "theme": _theme_faces(doc), "defaults": _doc_default_fonts(doc)}
+    blocks = _layout_blocks(doc)
+    secs = list(doc.sections)
+    sec_of_el = dict(zip(blocks, _block_sections(blocks)))
+    cover, front, toc_blocks, body = _split_regions(blocks, doc)
+    rows = _Rows()
+    info = _collect_body(ctx, body, sec_of_el)
+
+    def step(grp, fn, *a, dep=_ANY):
+        """一组读不出来不拖垮整份：记一行疑似、写明原因，后面的组照读。dep 是这一组依赖的
+        上游结果，上游没读出来就不白跑；TENDER_TRACEBACK=1 时照旧抛出——调试和真实样本
+        回放要的是完整栈，不能被这里吞掉。"""
+        if dep is None:
+            rows.add(grp, "本组未读", "它依赖的那一组没读出来，这一组没法读", _BROKEN, False)
+            return None
+        try:
+            return fn(*a)
+        except Exception as exc:  # noqa: BLE001
+            if os.environ.get("TENDER_TRACEBACK"):
+                raise
+            rows.add(grp, "本组读取中断", f"{type(exc).__name__}: {str(exc)[:120]}", _BROKEN, False)
+            return None
+
+    page = step("页面", _layout_page, ctx, rows, secs, info)
+    step("页面", _layout_header_footer, ctx, rows, secs, page, dep=page)
+    step("正文", _layout_body, ctx, rows, info)
+    toc_info = _toc_info(toc_blocks, ctx)
+    step("目录", _layout_toc, rows, toc_info)
+    step("标题", _layout_headings, ctx, rows, info, blocks, sec_of_el, toc_info)
+    step("表格", _layout_tables, ctx, rows, body)
+    fig = step("图", _layout_figures, ctx, rows, blocks, body, sec_of_el, page, dep=page) \
+        or {"n_tbl": 0, "n_pic": 0}
+    cover_lines = step("封面", _layout_cover, ctx, rows, cover, page, dep=page) or []
+
+    heads = info["heads"]
+    named_ct = sum(1 for h in heads if h["named"])
+    if heads:
+        if named_ct / len(heads) >= 0.8:
+            note = "标题走命名样式"
+        elif named_ct:
+            note = "标题的命名样式与直接格式混用"
+        else:
+            note = _unstyled_head_note(doc, heads)
+        fact1 = f"命名标题样式 {named_ct}/{len(heads)} 段（{note}）"
+    else:
+        fact1 = "未发现标题"
+    facts = [fact1, "字体清单：" + ("、".join(k for k, _v in info["fonts"].most_common(8)) or "未读出")]
+    dist = Counter(_short_level(_level_name(h["lvl"])) for h in heads)
+    scope = [f"正文候选 {len(info['body_fmts'])} 段",
+             (f"标题候选 {len(heads)} 段（" + "、".join(f"{k} {v}" for k, v in dist.most_common()) + "）")
+             if heads else "标题候选 0 段",
+             f"目录条目 {len(toc_info['entries'])} 条",
+             f"表格 {fig['n_tbl']} 张（边框、表头、单元格、宽度、边距）",
+             f"插图 {fig['n_pic']} 张（宽度、对齐）",
+             (f"页面（正文所在第 {page['body_no']} 节的纸张、边距、网格；各节差异；页眉页脚）"
+              if page else "页面（没读出来）"),
+             f"封面区 {len(cover_lines)} 行、前置页 {len(front)} 块（不计入统计）",
+             "未读：标题颜色、脚注尾注、水印与页面边框、分栏、列表缩进细节"]
+    warnings = []
+    if bare:
+        # 任何 Office 另存出来的 docx 都带样式表。一个样式都没有的，多半是把文字抽出来重新拼成
+        # 的 docx 冒充的转换件（真机上模型转一份 26MB 的 .doc 超了时，自己拼了一份：17.9 万段
+        # 纯文本、8.8 万个分页符），原稿版式一点没跟过来，读到的全是缺省值——要点破，不能
+        # 让它当版式样本交出去
+        warnings.append("这份文件里一个样式都没有，不像 Office 另存出来的文档——多半是把文字抽出来"
+                        "重新拼成的 docx，原稿的版式没有跟过来；下面读到的纸张、字体都是缺省值，"
+                        "不能当版式样本。请在 Word/WPS 里打开原文件另存为 .docx 后再读。")
+    return {"rows": rows.items, "facts": facts, "cover_lines": cover_lines, "scope": scope,
+            "warnings": warnings}
+
+
+def layout_read_file(path: Path) -> dict:
+    """layout-read 的文件入口：.doc 先转 .docx，再读。只读，不落任何产物。
+    转换这一步内置的只有 LibreOffice；没有它就把「怎么转」交给模型（LibreOffice 不是前提）。"""
+    if path.suffix.lower() == ".doc":
+        soffice = _find_soffice()
+        if not soffice:
+            die(_hand_over_hint(
+                "版式读取只认 .docx，得先把它转成 .docx",
+                "转好后对那份 .docx 重跑同一条命令即可，读取仍由脚本做；原 .doc 不用动。"
+                "本机确实没有可用的转换方式时，再请用户在 Word/WPS 里另存为 .docx。"), 2)
+        with _tempdir() as td:
+            out = _lo_convert(soffice, path, Path(td), Path(td) / "lo-profile", target="docx",
+                              stuck=lambda what: _stuck_doc_hint(
+                                  what, "转好后对那份 .docx 重跑同一条命令即可，读取仍由脚本做；原 .doc 不用动。"))
+            print(f"[.doc] 已转 docx 读取（LibreOffice）：{path.name}")
+            return layout_read_doc(Document(str(out)))
+    return layout_read_doc(Document(str(path)))
+
+
+def _layout_group_lines(res: dict) -> tuple[list[str], int]:
+    """规格表正文：每组一张四列表。取值不在半截处截断——「并列的另一种」被截掉就读不出所以然，
+    落盘的规格表带着省略号后面也没法解析；一格里放不下的按段收（见 _md_val）。"""
+    lines: list[str] = []
+    cur = None
+    sure = 0
+    for grp, item, val, basis, lv in res["rows"]:
+        if grp != cur:
+            if lines:
+                lines.append("")
+            cur = grp
+            lines += [f"【{grp}】", "| 项目 | 取值 | 依据 | 确定/疑似 |", "|---|---|---|---|"]
+        sure += lv == "确定"
+        lines.append(f"| {item} | {_md_val(val)} | {_md_cell(basis, 80)} | {lv} |")
+    return lines, sure
+
+
+def format_layout(res: dict, label: str) -> str:
+    lines, sure = _layout_group_lines(res)
+    n = len(res["rows"])
+    # 首行是模型读回显的第一眼：有没能读取的组必须在这里点出来，不能只躺在表里
+    head = f"[版式读取] {label}：读出 {n} 项（确定 {sure}、疑似 {n - sure}）"
+    broken = sum(1 for r in res["rows"] if r[3] == _BROKEN)
+    if broken:
+        head += f"，其中 {broken} 项没能读取（表里标「读取中断／本组未读」，请原样反馈）"
+    out = [head + "；本次只读，未改被读取的文件", ""]
+    out += [f"[注意] {w}" for w in res.get("warnings", ())]
+    if res.get("warnings"):
+        out.append("")
+    out += lines
+    out += ["", "事实：" + "；".join(res["facts"])]
+    if res["cover_lines"]:
+        out += ["", "封面文字（→ = 像会变的字，确认哪些做成字段；· = 看着是固定文字）："]
+        for t, flags in res["cover_lines"][:40]:
+            tail = f"（{'、'.join(flags)}）" if flags else ""
+            out.append(f"  {'→' if flags else '·'} {_md_cell(t, 120)}{tail}")
+        more = len(res["cover_lines"]) - 40
+        if more > 0:
+            out.append(f"  （另有 {more} 行未列出）")
+    out += ["", "已检查：" + "；".join(res["scope"])]
+    # 末尾两行是给读回显的模型看的（真机上它只看了回显最后 22 行）：下一步与取值纪律写在这里
+    out += ["[下一步] 把这张表交给用户确认（读得准的照报，需要看一眼的点名）；用户点头后跑 layout-adopt "
+            "登记为公司版式，后面的标书自动按它出——不替用户手工搭模板，不把参数甩给用户。",
+            "[取值] 读出什么报什么，由用户确认：不替用户改良版式，不推荐「更好看」的写法；"
+            "用户提出要改，用 layout-adopt --set 记进规格表。"]
+    return "\n".join(out)
+
+
+def write_layout_spec(res: dict, path: Path, src: Path) -> None:
+    lines = ["# 版式规格", "",
+             f"> 来源：{src.name}（sha256 {_sha256(src)[:12]}…）；读取时间 {time.strftime('%Y-%m-%d %H:%M')}。",
+             "> 本表是公司版式的本体：取值可直接改，「确定/疑似」列是机器读数的把握程度，"
+             "「依据」列写着样本数。标注「只记不落」的项不进模板。"]
+    lines += [f"> 注意：{w}" for w in res.get("warnings", ())]   # 这份文件当不了版式样本时，规格表开头就要说
+    lines.append("")
+    lines += _layout_group_lines(res)[0]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def cmd_layout_read(args) -> None:
+    files = [Path(x) for x in args.files]
+    for p in files:
+        if not p.is_file():
+            die(f"文件不存在：{p}")
+        if p.suffix.lower() not in (".docx", ".doc"):
+            die(f"只收 .docx / .doc——PDF 等读不准字体与磅值，请提供 Word 版：{p.name}", 2)
+    if len(files) > 1 and args.out:
+        die("--out 只支持单份文件")
+    # 两个落盘参数都是「结果写到哪个文件」：读之前先过防呆（落到被读文件上、后缀不符即拒）
+    hints = {"--out": 'layout-read "历史标书.docx" --out work/版式规格.md',
+             "--json": 'layout-read "历史标书.docx" --json work/review/layout-read.json'}
+    for flag, val, suffix in (("--out", getattr(args, "out", None), ".md"),
+                              ("--json", getattr(args, "json", None), ".json")):
+        if val:
+            guard_dump_path(val, files, suffix, flag, hint=hints[flag])
+    # 超过 5MB 的 .doc 不自动转换：读之前就拦下，多份文件时不留半截输出
+    big = [p for p in files if p.suffix.lower() == ".doc" and _doc_too_big(p)]
+    if big:
+        die("\n".join(_oversize_doc_hint(
+            os.stat(p).st_size,
+            "转好后对那份 .docx 重跑同一条命令即可，读取仍由脚本做；原 .doc 不用动。") for p in big), 2)
+    results = []
+    for p in files:
+        res = layout_read_file(p)
+        print(format_layout(res, p.name))
+        results.append({"file": p.name, **res})
+        if getattr(args, "out", None):
+            write_layout_spec(res, Path(args.out), p)
+            print(f"[规格表已落盘] {args.out}（确认后的取值就是公司版式的本体）")
+    if getattr(args, "json", None):
+        jp = Path(args.json)   # 多份文件逐份保留，不以后一份覆盖前一份
+        jp.parent.mkdir(parents=True, exist_ok=True)
+        jp.write_text(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M"), "files": results},
+                                 ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[结果已落盘] {jp}")
+
+
+# ---------------------------------------------------------------- 公司版式：登记与自动采用
+#
+# 规格表是公司版式的本体（layout-read 读出、用户确认、对话修订都落在它上面）。layout-adopt 把它
+# 登记到用户目录；之后建节、合册不指定模板就自动按它出。登记目录只存规格表与解析结果，模板每次
+# 从当前的内置基准模板现编译——引擎升级后登记的版式不会卡在旧模板上。
+# 2026-11-27 WorkBuddy 真机：套件到读出规格表就停了，模型只能自己搭模板，还让用户「建节和合册时
+# 传入这个参数」——用户只通过对话表达意图，参数不该甩给用户。
+
+LAYOUT_HOME_ENV = "TENDER_LAYOUT_HOME"
+LAYOUT_MD = "layout.md"
+LAYOUT_JSON = "layout.json"
+LAYOUT_COVER = "封面.docx"
+_LAYOUT: dict | None = None     # 本进程生效的公司版式（登记记录）；None＝内置口径
+
+_MAC_FONTS = ("Songti SC", "Heiti SC", "STSong", "STHeiti", "PingFang SC", "Hiragino Sans GB", "Kaiti SC",
+              "STKaiti", "STFangsong", "Baoli SC", "Yuanti SC", "Lantinghei SC", "Libian SC", "Xingkai SC")
+_SPEC_HEAD = ["项目", "取值", "依据", "确定/疑似"]
+
+# 规格表里各个项目属于哪一组——对话修订补一行时要知道往哪张表里补
+_ITEM_GROUP = {
+    **dict.fromkeys(("纸张", "页边距", "页面设置差异", "对称页边距", "文档网格", "页眉", "页码写法", "页脚其他文字"), "页面"),
+    **dict.fromkeys(("正文字体", "正文字号", "行距", "段前段后", "缩进", "对齐", "中文版式", "列表习惯", "空行习惯"), "正文"),
+    **dict.fromkeys(("目录标题", "目录一级条目", "目录二级条目", "目录三级条目", "目录四级条目", "目录层级",
+                     "目录行距", "目录段前段后", "目录缩进", "目录点线"), "目录"),
+    **dict.fromkeys(("编号形态", "编号间隔", "章起新页", "标题层级", "标题一级", "标题一级间距", "标题二级",
+                     "标题二级间距", "标题三级", "标题三级间距", "标题四级", "标题四级间距"), "标题"),
+    **dict.fromkeys(("表格边框", "表头样式", "表格文字", "表格宽度", "单元格边距", "表格布局", "表题"), "表格"),
+    "图题": "图", "图宽": "图",
+}
+
+
+def layout_home() -> Path:
+    """版式登记目录：环境变量 TENDER_LAYOUT_HOME 优先（测试与多套登记用），缺省在用户主目录下
+    （ZCode 与 WorkBuddy 两个宿主共用同一份登记——说一次就够）。"""
+    return Path(os.environ.get(LAYOUT_HOME_ENV) or (Path.home() / ".lingyan" / "tender-layout"))
+
+
+def _lay(*path, default=None):
+    """登记的版式里某一项取值。没登记、显式给了模板、或 --ignore-layout 时是 default——
+    引擎各处据此回落内置口径，行为与登记前逐项相同。"""
+    v = (_LAYOUT or {}).get("values")
+    for k in path:
+        if not isinstance(v, dict) or k not in v:
+            return default
+        v = v[k]
+    return default if v is None else v
+
+
+# ---- 规格表的读与认
+
+
+def _md_cells(line: str) -> list[str]:
+    """md 表格行拆格（反斜杠转义的竖线不算分隔符）。"""
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [c.replace("\x00", "|").strip() for c in s.replace("\\|", "\x00").split("|")]
+
+
+def _spec_rows(text: str) -> list[tuple]:
+    """规格表正文 → [(组, 项目, 取值, 依据, 确定/疑似, 行号)]。「读取时出错」的行不是读数，跳过。"""
+    rows, grp, head = [], "", False
+    for no, ln in enumerate(text.splitlines(), 1):
+        if ln.startswith("【") and ln.endswith("】"):
+            grp = ln[1:-1]
+            continue
+        if not ln.startswith("|"):
+            continue
+        cells = _md_cells(ln)
+        if cells[:4] == _SPEC_HEAD:
+            head = True
+        elif cells and not all(set(c) <= set("-: ") for c in cells):
+            if len(cells) >= 4 and grp:
+                rows.append((grp, cells[0], cells[1], cells[2], cells[3], no))
+    if not head or not rows:
+        raise ValueError("这不是版式规格表（没有「项目｜取值｜依据｜确定/疑似」四列表）"
+                         "——先用 layout-read 读出规格表，取值经用户确认后再登记")
+    return [r for r in rows if r[4] != _BROKEN]
+
+
+def _spec_name(text: str) -> str:
+    m = re.search(r"^> 来源：(.+?)（sha256", text, re.M)
+    return Path(m.group(1).strip()).stem if m and m.group(1).strip() else "公司标书"
+
+
+def _p_font(s: str) -> tuple[str, str]:
+    """「中文宋体、西文 Times New Roman」→ (中文, 西文)；「（默认）」「（同中文）」算没设。"""
+    m = re.match(r"^中文(.+?)(?:、西文 (.+))?$", s.strip())
+    if not m:
+        raise ValueError(f"字体要写成「中文宋体、西文 Times New Roman」这种样子，「{s}」认不出")
+    ea, asc = m.group(1).strip(), (m.group(2) or "").strip()
+    return ("" if ea.startswith("（") else ea, "" if asc.startswith("（") else asc)
+
+
+_PT_NAMES = {name: v for v, name in _PT_CN}
+
+
+def _p_pt(s: str) -> float:
+    """「小四（12 磅）」「12 磅」「三号」→ 磅值。"""
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?) 磅", s)
+    if m:
+        return float(m.group(1))
+    if s.strip() in _PT_NAMES:
+        return _PT_NAMES[s.strip()]
+    raise ValueError(f"字号要带磅值（「小四（12 磅）」「12 磅」）或用字号名（「三号」），「{s}」认不出")
+
+
+# 对齐的写法 → OOXML w:jc 的值（左＝不写）
+_ALIGN_W = {"左": None, "两端": "both", "居中": "center", "右": "right", "分散": "distribute"}
+
+
+def _p_fmt(s: str) -> dict:
+    """「中文宋体、西文 Times New Roman｜小四（12 磅）｜加粗｜左」→ 字体、字号、加粗、对齐。各段都可省。"""
+    f = {"ea": "", "ascii": "", "pt": None, "bold": False, "align": "左"}
+    for part in [x.strip() for x in s.split("｜")]:
+        if part.startswith("中文"):
+            f["ea"], f["ascii"] = _p_font(part)
+        elif "磅" in part or part in _PT_NAMES:
+            f["pt"] = _p_pt(part)
+        elif part in ("加粗", "不加粗"):
+            f["bold"] = part == "加粗"
+        elif part in _ALIGN_W:
+            f["align"] = part
+        elif part in ("倾斜", "不倾斜"):
+            continue
+        else:
+            raise ValueError(f"「{part}」认不出——写成「中文宋体、西文 Times New Roman｜小四（12 磅）｜加粗｜左」，"
+                             "字体、字号、加粗、对齐四段都可以省")
+    return f
+
+
+def _p_line(s: str) -> tuple[str, str]:
+    """行距 → (w:line, w:lineRule)。"""
+    s = s.strip()
+    for pat, rule, k in ((r"^固定 ([0-9.]+) 磅$", "exact", 20), (r"^最小 ([0-9.]+) 磅$", "atLeast", 20),
+                         (r"^([0-9.]+) 倍$", "auto", 240)):
+        m = re.match(pat, s)
+        if m:
+            return str(int(round(float(m.group(1)) * k))), rule
+    if s == "单倍":
+        return "240", "auto"
+    raise ValueError(f"行距写成「1.5 倍」「单倍」「固定 22 磅」「最小 22 磅」其中一种，「{s}」认不出")
+
+
+def _p_side(s: str) -> dict:
+    """段前或段后的一侧 → {auto}／{lines}／{tw}。"""
+    s = s.strip()
+    if s == "自动":
+        return {"auto": 1}
+    m = re.match(r"^([0-9.]+) 行$", s)
+    if m:
+        return {"lines": int(round(float(m.group(1)) * 100))}
+    m = re.match(r"^([0-9.]+) 磅$", s)
+    if m:
+        return {"tw": int(round(float(m.group(1)) * 20))}
+    raise ValueError(f"段前段后写成「段前 6 磅、段后 0.5 行」「段前自动」或「无」，「{s}」认不出")
+
+
+def _p_ba(s: str) -> dict:
+    """「段前 0 磅、段后 0 磅」「段后 10 磅」「无」→ 两侧段距；没写的那一侧是 None（不落）。"""
+    out = {"before": None, "after": None}
+    for part in [x.strip() for x in s.split("、")]:
+        if part == "无":
+            continue
+        if part.startswith("段前"):
+            out["before"] = _p_side(part[2:])
+        elif part.startswith("段后"):
+            out["after"] = _p_side(part[2:])
+        else:
+            raise ValueError(f"段前段后写成「段前 6 磅、段后 0.5 行」「段前自动」或「无」，「{part}」认不出")
+    return out
+
+
+def _p_spacing(s: str) -> dict:
+    """「行距 1.5 倍、段前自动」「行距 单倍、无」→ 行距与两侧段距。"""
+    out, rest = {"line": None}, []
+    for part in [x.strip() for x in s.split("、")]:
+        if part.startswith("行距 "):
+            out["line"] = _p_line(part[3:])
+        else:
+            rest.append(part)
+    out.update(_p_ba("、".join(rest)) if rest else {"before": None, "after": None})
+    return out
+
+
+def _p_ind(s: str) -> dict:
+    s = s.strip()
+    if s in ("无", "悬挂缩进"):
+        return {"first": 0}      # 显式零：合册收尾只给没有 w:ind 的段补缩进
+    m = re.match(r"^首行 ([0-9.]+) 字$", s)
+    if m:
+        return {"firstChars": int(round(float(m.group(1)) * 100))}
+    m = re.match(r"^首行 ([0-9.]+) 厘米$", s)
+    if m:
+        return {"first": int(round(float(m.group(1)) * 567))}
+    raise ValueError(f"缩进写成「首行 2 字」「首行 0.85 厘米」或「无」，「{s}」认不出")
+
+
+def _p_paper(s: str) -> dict:
+    s = s.strip()
+    m = re.match(r"^(A4|A3|A5|Letter) (纵向|横向)$", s)
+    if m:
+        w, h = next((pw, ph) for pw, ph, n in ((11906, 16838, "A4"), (16838, 23811, "A3"),
+                                               (8391, 11906, "A5"), (12240, 15840, "Letter")) if n == m.group(1))
+        portrait = m.group(2) == "纵向"
+    else:
+        m = re.match(r"^([0-9.]+)×([0-9.]+) 厘米 (纵向|横向)$", s)
+        if not m:
+            raise ValueError(f"纸张写成「A4 纵向」「A4 横向」或「21×29.7 厘米 纵向」，「{s}」认不出")
+        w, h, portrait = int(round(float(m.group(1)) * 567)), int(round(float(m.group(2)) * 567)), m.group(3) == "纵向"
+    return {"w": w, "h": h} if portrait else {"w": h, "h": w}
+
+
+def _p_margins(s: str) -> dict:
+    out = {}
+    for cn, key in (("上", "top"), ("下", "bottom"), ("左", "left"), ("右", "right")):
+        m = re.search(cn + r"\s*([0-9.]+)", s)
+        if not m:
+            raise ValueError(f"页边距写成「上 2、下 2、左 2、右 2 厘米」，这里没读到「{cn}」")
+        out[key] = int(round(float(m.group(1)) * 567))
+    m = re.search(r"装订线 ([0-9.]+) 厘米", s)
+    out["gutter"] = int(round(float(m.group(1)) * 567)) if m else 0
+    return out
+
+
+def _p_grid(s: str) -> dict:
+    s = s.strip()
+    lp = lambda mm: int(round(float(mm.group(1)) * 20)) if mm else 360   # noqa: E731
+    if s.startswith(("无网格", "未设置")):
+        return {"type": "default", "linePitch": lp(re.search(r"行距基准 ([0-9.]+) 磅", s))}
+    if s.startswith("行网格"):
+        m = re.search(r"每页约 (\d+) 行", s)
+        return {"type": "lines", "lines": int(m.group(1)) if m else 0, "linePitch": 312}
+    if s.startswith("行和字符网格"):
+        m = re.search(r"每页约 (\d+) 行", s)
+        return {"type": "linesAndChars", "lines": int(m.group(1)) if m else 0, "linePitch": 312}
+    if s.startswith("字符网格对齐"):
+        return {"type": "snapToChars", "linePitch": 312}
+    raise ValueError(f"文档网格这一行是机器读的，写成「无网格（行距基准 18 磅）」「行网格（每页约 44 行）」其中一种，「{s}」认不出")
+
+
+def _p_pagenum(s: str):
+    """「第 X 页、页脚居中｜小四（12 磅）」→ 页码写法；「无页码」是 None。"""
+    s = s.strip()
+    if s.startswith(("无页码", "正文所在节没有页码")):
+        return None
+    parts = [x.strip() for x in s.split("｜")]
+    kinds = [x.strip() for x in parts[0].split("、")]
+    where = next((k for k in kinds if k.startswith(("页脚", "页眉"))), None)
+    if not where or len(parts) < 2:
+        raise ValueError(f"页码写成「纯数字、页脚居中｜五号（10.5 磅）」这种样子，「{s}」认不出")
+    pos = where[2:]
+    if pos not in ("居中", "左", "右"):
+        raise ValueError(f"页码位置写成页脚居中／页脚左／页脚右，「{s}」认不出")
+    return {"style": "x页" if "第 X 页" in kinds else ("dash" if "— X —" in kinds else "plain"),
+            "total": "共 Y 页" in kinds, "where": where[:2], "pos": pos, "pt": _p_pt(parts[1])}
+
+
+_SIDE_CN = {"上": "top", "下": "bottom", "左": "left", "右": "right", "内横": "insideH", "内竖": "insideV"}
+
+
+def _p_border(s: str):
+    s = s.strip()
+    m = re.match(r"^全线 ([0-9.]+) 磅$", s)
+    if m:
+        return {"kind": "all", "sz": max(2, int(round(float(m.group(1)) * 8)))}
+    if s == "无框线":
+        return {"kind": "none", "sz": 4}
+    if s.startswith("三线表"):
+        return {"kind": "three", "sz": 12, "inner": "带内横线" in s}
+    m = re.match(r"^部分框线（(.+)）$", s)
+    if m:
+        return {"kind": "partial", "sz": 4,
+                "sides": [_SIDE_CN[x.strip()] for x in m.group(1).split("、") if x.strip() in _SIDE_CN]}
+    if s.startswith("未发现表格"):
+        return None
+    raise ValueError(f"表格边框写成「全线 0.5 磅」「无框线」「三线表」，「{s}」认不出")
+
+
+def _p_cellmar(s: str) -> int:
+    m = re.search(r"左右 ([0-9.]+) 厘米", s)
+    if not m:
+        raise ValueError(f"单元格边距写成「左右 0.19 厘米」，「{s}」认不出")
+    return int(round(float(m.group(1)) * 567))
+
+
+def _p_header(s: str) -> dict:
+    h = {"shade": None, "bold": False, "align": "左"}
+    for part in [x.strip() for x in s.split("、")]:
+        m = re.match(r"^底纹 ([0-9A-Fa-f]{6})$", part)
+        if m:
+            h["shade"] = m.group(1).upper()
+        elif part == "表头加粗":
+            h["bold"] = True
+        elif part == "无底纹":
+            continue
+        elif part.startswith("表头") and part[2:] in _ALIGN_W:
+            h["align"] = part[2:]
+        else:
+            raise ValueError(f"表头写成「无底纹」「底纹 D9D9D9、表头加粗、表头居中」这种样子，「{part}」认不出")
+    return h
+
+
+def _p_caption(s: str):
+    """「表上方、中文宋体、西文 Times New Roman｜小四（12 磅）｜左、编号「表 N-M」」；「未见表题」是 None。"""
+    s = s.strip()
+    if s.startswith("未见"):
+        return None
+    m = re.match(r"^[表图](上|下)方、", s)
+    body = s[m.end():] if m else s
+    tail = re.search(r"、编号「[^」]*」$", body)      # 「、编号「表 N-M」」是给写题注的模型看的，不是格式
+    if tail:
+        body = body[:tail.start()]
+    f = _p_fmt(body)
+    f["above"] = (m.group(1) == "上") if m else None
+    return f
+
+
+def _p_toc_indent(s: str, pt: float) -> dict:
+    """「一级 0 厘米、二级 2 字、三级 4 字」→ {"1": {"left": 缇}, …}。缩进打在条目文字里的全角空格
+    （手工目录的常见写法）折成同量的段落缩进——生成的目录是域，不能靠打空格缩进。"""
+    out = {}
+    for part in [x.strip() for x in s.split("、")]:
+        m = re.match(r"^([一二三四五])级 (.+)$", part)
+        if not m:
+            raise ValueError(f"目录缩进写成「一级 0 厘米、二级 2 字、三级 4 字」，「{part}」认不出")
+        val, tw = m.group(2), 0.0
+        lead = re.search(r"文字以 (\d+) 个(全角空格|空格)起头", val)
+        if lead:
+            tw += int(lead.group(1)) * pt * 20 * (1 if lead.group(2) == "全角空格" else 0.5)
+            val = re.sub(r"（.*?）", "", val).strip()
+        if val and not re.match(r"^[0-9.]+ (字|厘米)$", val):
+            raise ValueError(f"目录缩进写成「一级 0 厘米、二级 2 字、三级 4 字」，「{val}」认不出")
+        if val:
+            num, unit = val.split(" ")
+            tw += float(num) * (pt * 20 if unit == "字" else 567)
+        out[str(_DEPTH_CN.index(m.group(1)) + 1)] = {"left": int(round(tw))}
+    return out
+
+
+def _p_leader(s: str) -> str:
+    s = s.strip()
+    if s.startswith("未发现"):
+        return "dot"
+    for word, kind in (("点线", "dot"), ("短线", "hyphen"), ("下划线", "underscore"), ("粗线", "heavy")):
+        if word in s:
+            return kind
+    if "无引导线" in s or s == "无":
+        return "none"
+    raise ValueError(f"目录点线写成「点线字符」「制表位引导线（点线）」「制表位、无引导线」其中一种，「{s}」认不出")
+
+
+_SEP_W = {"全角空格": "\u3000", "半角空格": " ", "紧接": ""}
+
+
+def parse_layout_spec(text: str) -> dict:
+    """规格表正文 → 版式记录的 values 与「需要用户看一眼」清单。取值有几种并存（疑似行）时取排在
+    最前的那种，其余带回清单。认不出的取值抛 ValueError，消息点名行号、项目与写法。"""
+    by: dict[str, tuple] = {}
+    for grp, item, val, basis, lv, no in _spec_rows(text):
+        by.setdefault(item, (val, lv, no))
+    suspect, errors = [], []
+
+    def first(item, required=True):
+        if item not in by:
+            if required:
+                errors.append(f"规格表里没有「{item}」这一行")
+            return None
+        val, lv, no = by[item]
+        alts = [v.strip() for v in val.split(" ／ ")]
+        if lv == "疑似" and len(alts) > 1:
+            suspect.append(f"{item}：{' ／ '.join(alts)}（按排在前面的出了）")
+        return alts[0], no
+
+    def one(item, fn, required=True):
+        got = first(item, required)
+        if got is None:
+            return None
+        if got[0].startswith(("未发现", "未见")) and item != "表格边框":
+            return None     # 历史标书里没有的东西：这一项按内置写法
+        try:
+            return fn(got[0])
+        except ValueError as exc:
+            errors.append(f"第 {got[1]} 行「{item}」：{exc}")
+            return None
+
+    v: dict = {"page": {}, "body": {}, "headings": {}, "toc": {}, "numbering": {}, "table": {},
+               "caption": {}, "pagenum": None, "image": None}
+    pg = v["page"]
+    pg.update(one("纸张", _p_paper, required=False) or {"w": 11906, "h": 16838})
+    pg.update(one("页边距", _p_margins, required=False)
+              or {"top": 1440, "bottom": 1440, "left": 1803, "right": 1803, "gutter": 0})
+    pg["mirror"] = bool(by.get("对称页边距")) and by["对称页边距"][0].strip() == "是"
+    hd_row = first("页眉", required=False)
+    pg["header_row"] = (hd_row[0] if hd_row else "无").strip()
+    grid = one("文档网格", _p_grid, required=False) or {"type": "default", "linePitch": 360}
+    if grid.get("lines"):
+        grid["linePitch"] = max(120, round((pg["h"] - pg["top"] - pg["bottom"]) / grid["lines"]))
+    pg["grid"] = grid
+
+    b = v["body"]
+    b["ea"], b["ascii"] = one("正文字体", _p_font, required=False) or ("宋体", "Times New Roman")
+    b["pt"] = one("正文字号", _p_pt, required=False) or 12
+    b["line"] = one("行距", _p_line, required=False) or ["360", "auto"]
+    b.update(one("段前段后", _p_ba, required=False) or {"before": None, "after": None})
+    b["ind"] = one("缩进", _p_ind, required=False)
+    b["align"] = first("对齐", required=False) or ["左"]
+    b["align"] = b["align"][0]
+    if b["align"] not in _ALIGN_W:
+        errors.append(f"第 {by['对齐'][2]} 行「对齐」：写成左／两端／居中／右／分散其中一种，「{b['align']}」认不出")
+
+    heads = v["headings"]
+    for n in (1, 2, 3, 4):
+        name = f"标题{_DEPTH_CN[n - 1]}级"
+        f = one(name, _p_fmt, required=False)
+        if f is not None:
+            heads[str(n)] = {**f, **(one(name + "间距", _p_spacing, required=False)
+                                     or {"line": None, "before": None, "after": None})}
+    for n in ("3", "2"):     # 读缺的层级沿用上一级的外观
+        if heads and str(n) not in heads and str(int(n) - 1) in heads:
+            heads[n] = dict(heads[str(int(n) - 1)])
+    if heads and "4" not in heads and "3" in heads:
+        heads["4"] = dict(heads["3"])
+
+    t = v["toc"]
+    t["title"] = one("目录标题", _p_fmt, required=False)
+    levels = {}
+    for n in (1, 2, 3, 4):
+        f = one(f"目录{_DEPTH_CN[n - 1]}级条目", _p_fmt, required=False)
+        if f is not None:
+            levels[str(n)] = f
+    t["levels"] = levels
+    t["line"] = one("目录行距", _p_line, required=False)
+    t.update(one("目录段前段后", _p_ba, required=False) or {"before": None, "after": None})
+    toc_pt = max((f["pt"] or 12 for f in levels.values()), default=12)
+    t["indent"] = one("目录缩进", lambda s: _p_toc_indent(s, toc_pt), required=False) or {}
+    m = re.match(r"(\d) 级", (first("目录层级", required=False) or ["3"])[0])
+    t["depth"] = int(m.group(1)) if m else 3
+    t["leader"] = one("目录点线", _p_leader, required=False)
+    if not levels and t["title"] is None and not t["indent"] and t["leader"] is None:
+        v["toc"] = t = {}      # 历史标书里没有目录：目录整组按内置写法
+
+    sep = first("编号间隔", required=False)
+    v["numbering"] = {"scheme": one("编号形态", lambda s: _p_scheme(s), required=False) or "chapter",
+                      "sep": _SEP_W[sep[0]] if sep and sep[0] in _SEP_W else None}
+    if sep and sep[0] not in _SEP_W:
+        errors.append(f"第 {sep[1]} 行「编号间隔」：写成全角空格／半角空格／紧接，「{sep[0]}」认不出")
+    cnp = first("章起新页", required=False)
+    if cnp is None:
+        v["chapter_new_page"] = True
+    elif cnp[0] == "是" or cnp[0].startswith("未发现"):
+        v["chapter_new_page"] = True
+    elif cnp[0] == "否":
+        v["chapter_new_page"] = False
+    else:
+        m = re.match(r"^部分（(\d+)/(\d+)）$", cnp[0])
+        if not m:
+            errors.append(f"第 {cnp[1]} 行「章起新页」：写成是／否，「{cnp[0]}」认不出")
+        v["chapter_new_page"] = int(m.group(1)) * 2 > int(m.group(2)) if m else True
+
+    tb = v["table"]
+    tb["border"] = one("表格边框", _p_border, required=False)
+    tb["header"] = one("表头样式", _p_header, required=False)
+    tb["text"] = one("表格文字", _p_fmt, required=False)
+    tb["mar"] = one("单元格边距", _p_cellmar, required=False)
+    v["caption"] = {"table": one("表题", _p_caption, required=False), "figure": one("图题", _p_caption, required=False)}
+    fields = first("封面字段", required=False)
+    v["cover_fields"] = ([x.strip() for x in fields[0].split("、") if x.strip()] if fields else [])
+    v["pagenum"] = one("页码写法", _p_pagenum, required=False)
+    v["image"] = one("图宽", _p_image, required=False)
+    if errors:
+        raise ValueError("；".join(errors))
+    return {"values": v, "suspect": suspect}
+
+
+def _p_scheme(s: str) -> str:
+    m = re.match(r"^(chapter|decimal|gov|none)", s.strip())
+    if not m:
+        raise ValueError(f"编号形态写成 chapter／decimal／gov／none 其中一种，「{s}」认不出")
+    return m.group(1)
+
+
+def _p_image(s: str):
+    if s.strip().startswith("未发现"):
+        return None
+    m = re.search(r"版心宽的 ([0-9]+)%", s)
+    return {"ratio": int(m.group(1)) / 100 if m else 1.0, "center": s.strip().startswith("居中")}
+
+
+# ---- 登记目录的读写
+
+
+def _sha_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _read_record() -> dict:
+    try:
+        return json.loads((layout_home() / LAYOUT_JSON).read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_record(home: Path, rec: dict, text: str) -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    md = home / LAYOUT_MD
+    if md.is_file() and md.read_text(encoding="utf-8") != text:     # 上一份留档（最多 20 份）
+        hist = home / "历史"
+        hist.mkdir(exist_ok=True)
+        (hist / f"layout-{time.strftime('%Y%m%d-%H%M%S')}.md").write_text(md.read_text(encoding="utf-8"), encoding="utf-8")
+        for old in sorted(hist.glob("layout-*.md"))[:-20]:
+            old.unlink()
+    md.write_text(text, encoding="utf-8")
+    (home / LAYOUT_JSON).write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _layout_pending(rec: dict) -> list[str]:
+    """这一版还没接上的项：登记时明说，模型据此转告用户（不许含糊成「都按这个样式」）。
+    封面与页眉看登记时有没有提取到资产；页眉公司本来就没有（规格表页眉行=无）也不算没接上。"""
+    assets = rec.get("assets") or {}
+    out = []
+    if not assets.get("cover"):
+        out.append("封面整页（公司封面上的图与文字——重新登记时带 --source 即可接上）")
+    hd_row = ((rec.get("values") or {}).get("page") or {}).get("header_row") or ""
+    if not assets.get("header") and hd_row not in ("无", ""):
+        out.append("页眉（logo 与文字——重新登记时带 --source 即可接上）")
+    out.append("表格列宽（列宽仍由引擎按内容分配）")
+    return out
+
+
+def _header_images(p_el, part) -> list[dict]:
+    """页眉段里的图片：二进制与显示尺寸（wp:extent）一起取——落地时按原尺寸回贴。"""
+    out = []
+    for blip in p_el.iter(qn("a:blip")):
+        rid = blip.get(qn("r:embed"))
+        if not rid:
+            continue
+        try:
+            img = part.related_parts[rid]
+        except KeyError:
+            continue
+        cx = cy = None
+        for anc in blip.iterancestors():
+            if anc.tag in (qn("wp:inline"), qn("wp:anchor")):
+                ext = anc.find(qn("wp:extent"))
+                if ext is not None:
+                    cx, cy = int(ext.get("cx")), int(ext.get("cy"))
+                break
+        out.append({"blob": img.blob, "ext": Path(str(img.partname)).suffix.lower() or ".png",
+                    "cx": cx, "cy": cy})
+    return out
+
+
+def _header_pick(doc) -> dict | None:
+    """挑节页眉里最有内容的一份（优先带 logo 的；都不带图取第一份有文字的）。"""
+    theme, defaults = _theme_faces(doc), _doc_default_fonts(doc)
+    best = None
+    for sec in doc.sections:
+        h = sec.header
+        if h.is_linked_to_previous:
+            continue
+        lines, pts, eas, asiis, bolds, aligns, imgs = [], [], [], [], [], [], []
+        for p in h.paragraphs:
+            fmt = _para_fmt(p._p, doc, theme, defaults)
+            ls = _text_lines(p._p)
+            ni = _count_pictures(p._p)
+            if ls or ni:
+                lines += ls
+                pts.append(fmt["pt"])
+                eas.append(fmt["ea"])
+                asiis.append(fmt["ascii"])
+                bolds.append(fmt["bold"])
+                aligns.append(fmt["al"])
+            imgs += _header_images(p._p, h.part)
+        if not lines and not imgs:
+            continue
+        cand = {"text": "　".join(lines)[:60], "ea": Counter(eas).most_common(1)[0][0] if eas else "宋体",
+                "ascii": Counter(asiis).most_common(1)[0][0] if asiis else "Times New Roman",
+                "pt": Counter(x for x in pts if x).most_common(1)[0][0] if pts else 9,
+                "bold": any(bolds), "align": Counter(aligns).most_common(1)[0][0] if aligns else "居中",
+                "border": any(_p_bottom_border(p._p) for p in h.paragraphs), "images": imgs}
+        if imgs and (best is None or not best["images"]):
+            best = cand          # 带 logo 的优先，取第一份
+        elif best is None:
+            best = cand          # 都不带图：取第一份有文字的
+    return best
+
+
+def _trim_cover_tail(clone, last: bool) -> bool:
+    """封面末件清尾巴：自带的分节符与分页符都摘掉（整本里封面后面本来就另起页，带着会顶出
+    空白页）。清完只剩空段时连段一起删（返回 True 让调用方跳过）。只在最后一个元素上生效。"""
+    if not last:
+        return False
+    for s_el in clone.findall(".//" + qn("w:sectPr")):
+        s_el.getparent().remove(s_el)
+    for br in clone.findall(".//" + qn("w:br")):
+        if br.get(qn("w:type")) == "page":
+            br.getparent().remove(br)
+    if clone.tag == qn("w:p") and not _el_text(clone) and not _count_pictures(clone):
+        return True
+    return False
+
+
+def _build_cover_doc(src_doc: Document, cover_els: list) -> tuple[Document, int, list[str]]:
+    """把封面区元素级拷进一份干净文档（图片双通道重挂、痕迹清理、用到的样式随迁；
+    末件削掉分节符与分页符）。返回 (封面文档, 图片数, 跳过清单)。"""
+    cd = Document(str(DEFAULT_TEMPLATE))
+    _strip_body_content(cd)
+    src_map = {s.style_id: s for s in src_doc.styles if getattr(s, "style_id", None)}
+    tgt_ids = {s.style_id for s in cd.styles if getattr(s, "style_id", None)}
+    body = cd.element.body
+    sectpr = body.find(qn("w:sectPr"))
+    img_n, skipped = 0, []
+    for i, blk in enumerate(cover_els):
+        el = blk   # _layout_blocks 给的是 lxml 元素本身（copy-from 那边才是带 ._p 的包装对象）
+        clone, n, sk, _st = _clone_with_images(el, src_doc, cd)
+        img_n += n
+        skipped += sk
+        for pstyle in clone.findall(".//" + qn("w:pStyle")):
+            sid = pstyle.get(qn("w:val"))
+            if sid and sid not in tgt_ids and sid in src_map:
+                cd.styles.element.append(_deepcopy(src_map[sid].element))
+                tgt_ids.add(sid)
+        if _trim_cover_tail(clone, i == len(cover_els) - 1):
+            continue
+        if sectpr is not None:
+            sectpr.addprevious(clone)
+        else:
+            body.append(clone)
+    return cd, img_n, skipped
+
+
+def _extract_layout_assets(src: Path, home: Path) -> dict:
+    """从登记的历史标书里提取封面与页眉，存进登记目录（封面=封面.docx 元素级拷贝；
+    页眉 logo 图=媒体/页眉-N.<ext>，带原显示尺寸）。返回 assets（空 dict＝没有可提取的）。"""
+    home.mkdir(parents=True, exist_ok=True)  # 首次登记时登记目录还不存在（真机 2026-11-28：直接 FileNotFoundError）
+    doc = Document(str(src))
+    assets: dict = {}
+    hd = _header_pick(doc)
+    if hd:
+        media = home / "媒体"
+        media.mkdir(exist_ok=True)
+        files = []
+        for i, im in enumerate(hd["images"], 1):
+            f = media / f"页眉-{i}{im['ext']}"
+            f.write_bytes(im.pop("blob"))
+            files.append({"file": f.relative_to(home).as_posix(), "cx": im["cx"], "cy": im["cy"]})
+        hd["images"] = files
+        assets["header"] = hd
+    blocks = _layout_blocks(doc)
+    cover_els, _f, _t, _b = _split_regions(blocks, doc)
+    # 不过滤空段——空段就是封面的竖向排版，滤掉后封面内容全挤到页顶（真机 2026-11-28 抓到）；
+    # 末件自带的分节符与分页符由 _trim_cover_tail 削
+    if cover_els:
+        cd, _n, _sk = _build_cover_doc(doc, cover_els)
+        _save_doc(cd, home / LAYOUT_COVER)
+        assets["cover"] = LAYOUT_COVER
+    return assets
+
+
+def load_layout() -> dict | None:
+    """出文档前读本机登记的公司版式。规格表在登记后改过就按改后的表重读（对话修订不必非重跑
+    登记）；改坏了就沿用上一次读得出来的取值并点名。没有登记返回 None。"""
+    home = layout_home()
+    md = home / LAYOUT_MD
+    rec = _read_record()
+    if not md.is_file():
+        return rec if rec.get("values") else None
+    text = md.read_text(encoding="utf-8")
+    if not rec.get("values"):
+        # 只有规格表、没有解析结果（手工拷过来的）：现读一份
+        try:
+            parsed = parse_layout_spec(text)
+        except ValueError:
+            return None
+        rec = {"name": _spec_name(text), "registered_at": time.strftime("%Y-%m-%d %H:%M"),
+               "values": parsed["values"], "suspect": parsed["suspect"], "md_sha256": _sha_text(text)}
+        _write_record(home, rec, text)
+        return rec
+    if _sha_text(text) != rec.get("md_sha256"):
+        try:
+            parsed = parse_layout_spec(text)
+        except ValueError as exc:
+            print(f"  ⚠️ 登记的版式规格表在登记后改过，有一行读不出来（{exc}）——本次仍按上一次读得出来的"
+                  f"取值出稿；修正后重跑 layout-adopt")
+        else:
+            rec.update(values=parsed["values"], suspect=parsed["suspect"], md_sha256=_sha_text(text))
+            (home / LAYOUT_JSON).write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+            print("[版式] 规格表在登记后改过，已按改后的表读取")
+    return rec
+
+
+def activate_layout(args) -> None:
+    """出文档的命令（建节／合册／插图）开工前决定本次按不按登记的公司版式出。显式给了模板、或
+    --ignore-layout（用户说这次不用公司版式），一律回到内置口径。"""
+    global _LAYOUT
+    _LAYOUT = None
+    if args.cmd not in ("create", "assemble", "image"):
+        return
+    if getattr(args, "template", None) or getattr(args, "ignore_layout", False):
+        return
+    rec = load_layout()
+    if not rec or not rec.get("values"):
+        return
+    _LAYOUT = rec
+    if args.cmd in ("create", "assemble"):
+        print(f"[版式] 本次按公司版式「{rec.get('name', '')}」出稿（{rec.get('registered_at', '')} 登记；"
+              f"招标文件另有格式要求的以招标的为准）")
+
+
+# ---- 把版式写进文档（样式与页面）
+
+
+_RPR_ORDER = ("rStyle rFonts b bCs i iCs caps smallCaps strike dstrike outline shadow emboss imprint noProof "
+              "snapToGrid vanish webHidden color spacing w kern position sz szCs highlight u effect bdr shd "
+              "fitText vertAlign rtl cs em lang eastAsianLayout specVanish oMath").split()
+_PPR_ORDER = ("pStyle keepNext keepLines pageBreakBefore framePr widowControl numPr suppressLineNumbers pBdr "
+              "shd tabs suppressAutoHyphens kinsoku wordWrap overflowPunct topLinePunct autoSpaceDE autoSpaceDN "
+              "bidi adjustRightInd snapToGrid spacing ind contextualSpacing mirrorIndents suppressOverlap jc "
+              "textDirection textAlignment textboxTightWrap outlineLvl divId cnfStyle rPr sectPr pPrChange").split()
+
+
+def _rebuild(style_el, tag: str, items: list) -> None:
+    """把样式的 rPr／pPr 整体换成给定子元素（按 OOXML 定序）。留着旧属性会顶掉新设的——基准模板的
+    标题样式带着主题字体与加粗，链接的字符样式还带着主题蓝，只改其中几项等于没改。"""
+    for old in style_el.findall(qn(f"w:{tag}")):
+        style_el.remove(old)
+    if not items:
+        return
+    order = _RPR_ORDER if tag == "rPr" else _PPR_ORDER
+    parent = OxmlElement(f"w:{tag}")
+    for name, at in sorted(items, key=lambda it: order.index(it[0])):
+        el = OxmlElement(f"w:{name}")
+        for k, val in at.items():
+            el.set(qn(k), str(val))
+        parent.append(el)
+    style_el.append(parent)     # 先 pPr 后 rPr 依次调用，落在 w:style 的末尾——正是定序里的位置
+
+
+def _rpr_items(f: dict) -> list:
+    at = {}
+    if f.get("ascii"):
+        at.update({"w:ascii": f["ascii"], "w:hAnsi": f["ascii"], "w:cs": f["ascii"]})
+    if f.get("ea"):
+        at["w:eastAsia"] = f["ea"]
+    items = [("rFonts", at)] if at else []
+    if f.get("bold"):
+        items += [("b", {}), ("bCs", {})]
+    if f.get("pt"):
+        items += [("sz", {"w:val": int(round(f["pt"] * 2))}), ("szCs", {"w:val": int(round(f["pt"] * 2))})]
+    return items
+
+
+def _spacing_at(sp: dict) -> dict:
+    at = {}
+    if sp.get("line"):
+        at["w:line"], at["w:lineRule"] = sp["line"][0], sp["line"][1]
+    for side, pre in (("before", "w:before"), ("after", "w:after")):
+        v = sp.get(side)
+        if not v:
+            continue
+        if v.get("auto"):
+            at[pre + "Autospacing"] = "1"
+        elif "lines" in v:
+            at[pre + "Lines"], at[pre] = v["lines"], "0"
+        else:
+            at[pre] = v.get("tw", 0)     # 不写「N 行＝0」：读数先看行数，写了会把「0 磅」读成「0 行」
+    return at
+
+
+def _jc_at(align: str) -> list:
+    return [("jc", {"w:val": _ALIGN_W[align]})] if _ALIGN_W.get(align) else []
+
+
+def _run_fmt(run, f: dict) -> None:
+    """按版式里的字体字号加粗给一个 run 写直写格式（目录标题这类不挂样式的段用）。"""
+    asc = f.get("ascii") or f.get("ea") or "Times New Roman"
+    run.font.name = asc
+    set_east_asia(run._element, f.get("ea") or asc)
+    if f.get("pt"):
+        run.font.size = Pt(f["pt"])
+    run.font.bold = bool(f.get("bold"))
+
+
+def _caption_style(style, f: dict, line) -> None:
+    """题注样式：字体字号加粗对齐跟版式，行距随正文，首行不缩进。"""
+    _rebuild(style.element, "pPr", [("ind", {"w:firstLine": "0"}),
+                                    ("spacing", _spacing_at({"line": line})), *_jc_at(f.get("align", "左"))])
+    _rebuild(style.element, "rPr", _rpr_items(f))
+
+
+def apply_layout(doc: Document, rec: dict) -> None:
+    """把登记的公司版式写进一份从内置基准模板起的文档：页面设置与版式管得着的样式。"""
+    from docx.shared import Emu
+
+    v = rec["values"]
+    pg = v.get("page") or {}
+    sec = doc.sections[0]
+    if pg.get("w"):
+        sec.page_width, sec.page_height = Emu(pg["w"] * 635), Emu(pg["h"] * 635)
+    for key, attr in (("top", "top_margin"), ("bottom", "bottom_margin"), ("left", "left_margin"),
+                      ("right", "right_margin"), ("gutter", "gutter")):
+        if pg.get(key) is not None:
+            setattr(sec, attr, Emu(int(pg[key]) * 635))
+    grid = pg.get("grid") or {}
+    dg = sec._sectPr.find(qn("w:docGrid"))
+    if dg is None:
+        dg = OxmlElement("w:docGrid")
+        succ = next((s for s in sec._sectPr if s.tag in (qn("w:printerSettings"), qn("w:sectPrChange"))), None)
+        succ.addprevious(dg) if succ is not None else sec._sectPr.append(dg)
+    for a in list(dg.attrib):
+        del dg.attrib[a]
+    dg.set(qn("w:type"), grid.get("type", "default"))
+    dg.set(qn("w:linePitch"), str(grid.get("linePitch", 360)))
+    settings = doc.settings.element
+    if pg.get("mirror") and settings.find(qn("w:mirrorMargins")) is None:
+        mm = OxmlElement("w:mirrorMargins")
+        mm.set(qn("w:val"), "true")
+        settings.insert(0, mm)
+
+    # 文档默认段距清零：基准模板的 docDefaults 里是段后 10 磅、行距 1.15 倍（Word 英文模板的常态），
+    # 版式里「没设」的那一侧会被它顶成 10 磅。靠它撑着间距的封面两样式按原有效值写死，观感不变
+    dd = doc.styles.element.find(qn("w:docDefaults"))
+    dppr = dd.find(qn("w:pPrDefault")).find(qn("w:pPr")) if dd is not None else None
+    if dppr is not None:
+        dsp = dppr.find(qn("w:spacing"))
+        if dsp is not None:
+            dsp.set(qn("w:before"), "0")
+            dsp.set(qn("w:after"), "0")
+    for name in ("Cover Title", "Cover Sub"):
+        st = _get_style(doc, name)
+        if st is not None:
+            _rebuild(st.element, "pPr", [("spacing", {"w:before": "0", "w:after": "200", "w:line": "276", "w:lineRule": "auto"}),
+                                         ("ind", {"w:firstLine": "0"}), ("jc", {"w:val": "center"})])
+
+    b = v.get("body") or {}
+    normal = doc.styles["Normal"]
+    _rebuild(normal.element, "pPr", [("spacing", _spacing_at(b)), *_jc_at(b.get("align", "左"))])
+    _rebuild(normal.element, "rPr", _rpr_items(b))
+
+    for n in (1, 2, 3, 4):
+        h = (v.get("headings") or {}).get(str(n))
+        st = _get_style(doc, f"Heading {n}")
+        if h is None or st is None:
+            continue
+        spc = {"line": h.get("line"), "before": h.get("before"), "after": h.get("after")}
+        _rebuild(st.element, "pPr", [("keepNext", {}), ("keepLines", {}), ("spacing", _spacing_at(spc)),
+                                     *_jc_at(h.get("align", "左")), ("outlineLvl", {"w:val": n - 1})])
+        _rebuild(st.element, "rPr", _rpr_items(h))
+        ch = _get_style(doc, f"Heading {n} Char")
+        if ch is not None:
+            _rebuild(ch.element, "rPr", _rpr_items(h))
+
+    t = v.get("toc") or {}
+    levels = t.get("levels") or {}
+    ind = t.get("indent") or {}
+
+    def lvl_font(n: int) -> dict:
+        have = sorted(levels, key=int)
+        if not have:
+            return {"ea": "宋体", "ascii": "宋体", "pt": 12, "bold": n == 1, "align": "左"}
+        f = dict(levels.get(str(n)) or levels[min(have, key=lambda k: abs(int(k) - n))])
+        f.setdefault("pt", 12)
+        f.setdefault("bold", False)
+        return f
+
+    for n in (1, 2, 3, 4):
+        st = _get_style(doc, f"TOC {n}")
+        if st is None:
+            continue
+        f = lvl_font(n)
+        if t:
+            spc = {"line": t.get("line") or ["240", "auto"], "before": t.get("before"), "after": t.get("after")}
+            if ind:
+                have = sorted(ind, key=int)
+                left = (ind.get(str(n)) or {}).get("left")
+                if left is None:      # 表里没列的层级：往上的归零，往下的比最深一级多缩 2 字
+                    left = 0 if n < int(have[0]) else ind[have[-1]]["left"] + round(f["pt"] * 40)
+            else:
+                left = round(0.74 * 567 * (n - 1))
+        else:       # 历史标书里没有目录：目录整组按内置写法（把文档默认值原先给的有效值写死）
+            spc, left = {"line": ["240", "auto"], "before": {"tw": 0}, "after": {"tw": 200}}, round(0.74 * 567 * (n - 1))
+        _rebuild(st.element, "pPr", [("spacing", _spacing_at(spc)), ("ind", {"w:left": left, "w:firstLine": "0"})])
+        _rebuild(st.element, "rPr", _rpr_items(f))
+
+    # 题注：表题、图题各有各的样式（版式里两种题注常不一样：表题居左、图题居中）。版式没读到的那一种
+    # 按内置写法——内置写法原先靠文档默认值撑着段后 10 磅，这里连同它一起写死，观感不变
+    cap = v.get("caption") or {}
+    builtin_cap = {"ea": "宋体", "ascii": "宋体", "pt": 9, "bold": True, "align": "居中", "above": None}
+    for name, spec in (("Table Caption", cap.get("table")), ("Figure Caption", cap.get("figure"))):
+        st = _get_style(doc, name)
+        if st is None:
+            st = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+        if spec is None:
+            _rebuild(st.element, "pPr", [("ind", {"w:firstLine": "0"}),
+                                         ("spacing", {"w:before": "0", "w:after": "200", "w:line": "276", "w:lineRule": "auto"}),
+                                         ("jc", {"w:val": "center"})])
+            _rebuild(st.element, "rPr", _rpr_items(builtin_cap))
+        else:
+            _caption_style(st, spec, (v.get("body") or {}).get("line"))
+
+
+# ---- 三个命令
+
+
+def _fmt_desc(f: dict) -> str:
+    s = f.get("ea") or "正文字体"
+    if f.get("ascii"):
+        s += f"／{f['ascii']}"
+    if f.get("pt"):
+        s += f"、{_pt_label(f['pt'])}"
+    if f.get("bold"):
+        s += "、加粗"
+    return s
+
+
+def _line_desc(line) -> str:
+    return _line_label(*line) if line else "随正文"
+
+
+def _ind_desc(ind) -> str:
+    if not ind:
+        return "首行缩进按内置 2 字"
+    if ind.get("firstChars"):
+        return f"首行缩进 {ind['firstChars'] / 100:g} 字"
+    return f"首行缩进 {_tw_cm(ind['first'])} 厘米" if ind.get("first") else "首行不缩进"
+
+
+def _border_desc(bd) -> str:
+    return {"all": f"全线 {(bd or {}).get('sz', 4) / 8:g} 磅", "none": "无框线", "three": "三线表",
+            "partial": "部分框线"}.get((bd or {}).get("kind"), "全线 0.5 磅")
+
+
+def _layout_lines(rec: dict) -> tuple[list[str], list[str]]:
+    """（生效清单，还没接上的清单）——登记、查看、模型转告用户用的是同一份话。"""
+    v = rec["values"]
+    pg, b = v.get("page") or {}, v.get("body") or {}
+    on = [f"纸张与页边距（{_paper_label(pg).strip()}，上 {_tw_cm(pg.get('top', 1440))}、下 {_tw_cm(pg.get('bottom', 1440))}、"
+          f"左 {_tw_cm(pg.get('left', 1803))}、右 {_tw_cm(pg.get('right', 1803))} 厘米）"]
+    on.append(f"正文（{_fmt_desc({**b, 'bold': False})}、行距 {_line_desc(b.get('line'))}、{_ind_desc(b.get('ind'))}、"
+              f"{b.get('align', '左')}对齐）")
+    if v.get("headings"):
+        on.append("一至四级标题（按登记表里标题各行）")
+    t = v.get("toc") or {}
+    if t:
+        on.append(f"目录（{t.get('depth', 3)} 级，标题与各级条目的字体字号按登记表）")
+    tb = v.get("table") or {}
+    on.append(f"表格（{_border_desc(tb.get('border'))}，"
+              f"{'表头加粗' if _lay_table_of(tb)['hb'] else '表头不加粗'}，"
+              f"{'底纹 ' + _lay_table_of(tb)['shade'] if _lay_table_of(tb)['shade'] else '无底纹'}，"
+              f"{_fmt_desc({**_lay_table_of(tb), 'bold': False})}）")
+    cap = v.get("caption") or {}
+    if cap.get("table"):
+        on.append(f"表题（{_fmt_desc(cap['table'])}，表{'上' if cap['table'].get('above', True) else '下'}方）")
+    if cap.get("figure"):
+        on.append(f"图题（{_fmt_desc(cap['figure'])}）")
+    pn = v.get("pagenum")
+    on.append("页码（" + (f"{'第 X 页' if pn['style'] == 'x页' else ('— X —' if pn['style'] == 'dash' else '纯数字')}"
+                 f"{'、共 Y 页' if pn.get('total') else ''}、{pn['where']}{pn['pos']}、{_pt_label(pn['pt'])}）"
+                 if pn else "不编页码") + "；封面、前置页与目录页不编号，正文从第 1 页起")
+    nm = v.get("numbering") or {}
+    on.append(f"编号（{nm.get('scheme', 'chapter')}"
+              f"{'、编号与标题之间' + {'　': '全角空格', ' ': '半角空格', '': '紧接'}[nm['sep']] if nm.get('sep') is not None else ''}"
+              f"、{'章起新页' if v.get('chapter_new_page', True) else '章不另起页'}）")
+    grid = (pg.get("grid") or {}).get("type", "default")
+    if grid != "default":
+        on.append(f"文档网格（{'行网格' if grid == 'lines' else ('行和字符网格' if grid == 'linesAndChars' else '字符网格对齐')}）")
+    assets = rec.get("assets") or {}
+    if assets.get("cover"):
+        on.append(f"封面（登记的公司封面 {assets['cover']}；项目名、投标人、日期这些字段每本标书开写时再改）")
+    hd_row = pg.get("header_row") or ""
+    if assets.get("header"):
+        hd = assets["header"]
+        parts = []
+        if hd.get("images"):
+            parts.append("logo 图")
+        if hd.get("text"):
+            parts.append("文字「%s」" % hd["text"])
+        if hd.get("pt"):
+            parts.append(_pt_label(hd["pt"]))
+        if hd.get("border"):
+            parts.append("带横线")
+        on.append("页眉（正文页显示：" + "、".join(parts) + "）")
+    elif hd_row == "无":
+        on.append("页眉（公司标书没有页眉，不出）")
+    if (v.get("table") or {}).get("mar") not in (None, 108):
+        on.append(f"表格单元格边距（左右 {_tw_cm(v['table']['mar'])} 厘米）")
+    return on, _layout_pending(rec)
+
+
+def _lay_table_of(tb: dict) -> dict:
+    """表格口径（没读到的项回落内置）——与引擎出表时用的是同一份算法。"""
+    text, head, bd = tb.get("text") or {}, tb.get("header") or {}, tb.get("border") or {}
+    return {"ea": text.get("ea") or "宋体", "ascii": text.get("ascii") or "Times New Roman",
+            "pt": text.get("pt") or 10.5, "align": text.get("align") or "左",
+            "hb": head.get("bold", True) if tb.get("header") else True,
+            "ha": (head.get("align") or "左") if tb.get("header") else "居中",
+            "shade": head.get("shade") if tb.get("header") else "D9D9D9",
+            "mar": tb.get("mar"),
+            "border": bd if tb.get("border") and bd.get("kind") else {"kind": "all", "sz": 4}}
+
+
+def _mac_font_note(rec: dict) -> str | None:
+    v = rec["values"]
+    names = set()
+    for f in [v.get("body") or {}, *(v.get("headings") or {}).values(), *((v.get("toc") or {}).get("levels") or {}).values()]:
+        if f.get("ea") in _MAC_FONTS:
+            names.add(f["ea"])
+    return (f"字体提醒：中文字体「{'、'.join(sorted(names))}」是 macOS 自带字体，出稿的机器是 Windows 时会回退成"
+            f"别的字体——把登记表里的字体名改成那台机器上有的（如宋体），再登记一次") if names else None
+
+
+def cmd_layout_adopt(args) -> None:
+    src = Path(args.spec)
+    if not src.is_file():
+        die(f"规格表不存在：{src}（先用 layout-read 读出规格表，取值经用户确认后再登记）", 2)
+    text = src.read_text(encoding="utf-8-sig")
+    old = _read_record()
+    try:
+        if args.set:
+            text = _apply_sets(text, args.set)
+        parsed = parse_layout_spec(text)
+    except ValueError as exc:
+        die(str(exc), 2)
+    home = layout_home()
+    src_line = re.search(r"^> 来源：(.+)$", text, re.M)
+    source = (src_line.group(1).strip() if src_line else "") or old.get("source", "")
+    # 叫法：用户起了的优先；修订的是同一份表（来源行没变）就沿用上一次的叫法，别被来源文件名顶掉
+    keep = bool(old.get("name")) and old.get("source") == source
+    rec = {"name": args.name or (old.get("name") if keep else (_spec_name(text) if src_line else old.get("name")))
+           or "公司标书",
+           "source": source,
+           "registered_at": time.strftime("%Y-%m-%d %H:%M"), "md_sha256": _sha_text(text),
+           "values": parsed["values"], "suspect": parsed["suspect"]}
+    # 封面与页眉要从历史标书里取件：带 --source 就提取存进登记目录；不带就沿用上一次的资产，
+    # 从来没提取过则如实列进「还没接上」并给一句怎么接。取值先登记生效（登记目录在这里创建），
+    # 资产提取失败只警告不回滚——登记的主意图是取值，别让它陪葬；话术不许谎称没发生的事
+    rec["assets"] = old.get("assets") or {}
+    _write_record(home, rec, text)
+    if getattr(args, "source", None):
+        spath = Path(args.source)
+        if not spath.is_file():
+            die(f"要提取封面与页眉的历史标书不存在：{spath}（版式取值已登记生效；"
+                f"确认路径后重跑 layout-adopt <规格表> --source <历史标书>）", 2)
+        try:
+            rec["assets"] = _extract_layout_assets(spath, home)
+        except Exception as exc:  # noqa: BLE001
+            if os.environ.get("TENDER_TRACEBACK"):
+                raise
+            print(f"  ⚠️ 封面与页眉没能提取（{type(exc).__name__}: {str(exc)[:120]}）——"
+                  f"版式取值已登记生效；要接上请重跑 layout-adopt <规格表> --source <历史标书>")
+        else:
+            _write_record(home, rec, text)   # 资产写回登记记录（同一份规格表，不进历史归档）
+    on, off = _layout_lines(rec)
+    print(f"[版式登记] 已登记为公司版式「{rec['name']}」，后面的标书自动按它出——建节、合册不用再指定模板；"
+          f"招标文件另有格式要求的以招标的为准。")
+    if args.set:
+        print(f"  对话修订已记入：{'、'.join(s.split('=', 1)[0] for s in args.set)}")
+    print("  生效：" + "；".join(on))
+    if rec["suspect"]:
+        print("  需要用户看一眼（历史标书里几种写法并存，先按排在前面的出了；用户要换就说）："
+              + "；".join(s.replace("（按排在前面的出了）", "") for s in rec["suspect"]))
+    if off:
+        print("  这一版还没接上（标书里暂时按内置写法）：" + "、".join(off))
+        if not getattr(args, "source", None) and not rec["assets"]:
+            print("  要连封面与页眉一起接上：重新登记时把那份历史标书一起给——"
+                  "layout-adopt <规格表> --source 历史标书.docx")
+    note = _mac_font_note(rec)
+    if note:
+        print("  " + note)
+    print(f"  存放：{home / LAYOUT_MD}（规格表就是版式的本体：要改版式，改这张表或用 --set，再登记一次；"
+          f"用户说「别用公司版式了」跑 layout-forget）")
+    print("  对用户怎么说：「已经记下了，以后新写的标书会自动按这个版式出；招标文件另有格式要求的，"
+          "以招标的为准。」")
+
+
+def _apply_sets(text: str, sets: list[str]) -> str:
+    """对话修订：--set 项目=取值，把规格表里这一行的取值换掉（没有这一行就在所属组里补一行）。"""
+    lines = text.splitlines()
+    for kv in sets:
+        item, sep, val = kv.partition("=")
+        item, val = item.strip(), val.strip()
+        if item not in _ITEM_GROUP:
+            raise ValueError(f"没有「{item}」这一项——可改的项目：{'、'.join(_ITEM_GROUP)}")
+        if not sep or not val:
+            raise ValueError(f"--set 要写成「项目=取值」，「{kv}」里没有取值")
+        new = f"| {item} | {val.replace('|', chr(92) + '|')} | 对话修订（用户 {time.strftime('%Y-%m-%d')} 说改的） | 确定 |"
+        hit = next((i for i, ln in enumerate(lines) if ln.startswith("|") and _md_cells(ln)[:1] == [item]), None)
+        if hit is not None:
+            lines[hit] = new
+            continue
+        grp, head = _ITEM_GROUP[item], [f"【{_ITEM_GROUP[item]}】", "| 项目 | 取值 | 依据 | 确定/疑似 |", "|---|---|---|---|"]
+        try:
+            at = next(i for i, ln in enumerate(lines) if ln.strip() == head[0])
+        except StopIteration:
+            lines += ["", *head, new]
+            continue
+        end = at + 1
+        while end < len(lines) and lines[end].startswith("|"):
+            end += 1
+        lines[end:end] = ([head[1], head[2]] if end == at + 1 else []) + [new]
+    return "\n".join(lines) + "\n"
+
+
+def cmd_layout_show(args) -> None:
+    home = layout_home()
+    rec = _read_record()
+    if not (home / LAYOUT_MD).is_file() or not rec.get("values"):
+        print("[版式] 没有登记公司版式——后面的标书按内置版式出。用户要登记：给一份 Word 版历史标书，"
+              "layout-read 读出规格表、确认后 layout-adopt。")
+        return
+    on, off = _layout_lines(rec)
+    print(f"[版式登记] 公司版式「{rec.get('name', '')}」（{rec.get('registered_at', '')} 登记"
+          + (f"，来源 {rec['source']}" if rec.get("source") else "") + f"），存放：{home / LAYOUT_MD}")
+    print((home / LAYOUT_MD).read_text(encoding="utf-8").rstrip())
+    print("生效：" + "；".join(on))
+    print("这一版还没接上：" + "、".join(off))
+
+
+def cmd_layout_forget(args) -> None:
+    home = layout_home()
+    md = home / LAYOUT_MD
+    if not md.is_file():
+        print("[版式] 没有登记公司版式——后面的标书本来就按内置版式出，不用取消。")
+        return
+    hist = home / "历史"
+    hist.mkdir(exist_ok=True)
+    keep = hist / f"layout-{time.strftime('%Y%m%d-%H%M%S')}-取消登记.md"
+    keep.write_text(md.read_text(encoding="utf-8"), encoding="utf-8")
+    md.unlink()
+    (home / LAYOUT_JSON).unlink(missing_ok=True)
+    print(f"[版式取消] 已取消登记，后面的标书按内置版式出。原规格表留在 {keep}"
+          f"（要恢复：对它重跑 layout-adopt）。")
 
 
 def _positive_int(v: str) -> int:
@@ -4990,7 +8452,10 @@ def main() -> None:
     sp.add_argument("--title", required=True)
     sp.add_argument("--body", help="body 块序列 JSON 文件（段落/表格混排；段落可带 "
                                    "style: cover-title/cover-sub/h2/h3/h4）")
-    sp.add_argument("--template", help="版式模板 docx（缺省用包内基准模板）")
+    sp.add_argument("--template", help="版式模板 docx（缺省：登记了公司版式就按公司版式出，没登记用包内基准模板；"
+                                       "显式给了模板就不按公司版式）")
+    sp.add_argument("--ignore-layout", action="store_true",
+                    help="本次不按登记的公司版式出，用内置版式（用户明说「这次不用公司版式」时才加）")
     sp.add_argument("--landscape", action="store_true",
                     help="整节横向页（A4 横版）——宽表节（9 列以上团队/资信表）用")
     sp.add_argument("--replace", action="store_true", help="已存在时覆盖重写")
@@ -5076,17 +8541,18 @@ def main() -> None:
 
     sp = sub.add_parser("assemble", help="按目录树合册")
     sp.add_argument("--work", default="work")
-    sp.add_argument("--numbering", choices=["chapter", "decimal", "gov", "none"],
-                    default="chapter",
-                    help="章节编号形态：chapter=第X章/1.1；decimal=1/1.1；"
-                         "gov=一、/（一）/1.；none=不编")
-    sp.add_argument("--toc-depth", type=int, choices=[1, 2, 3, 4], default=3,
-                    help="目录层级（静态条目与 TOC 域刷新口径一致，默认 3 级）")
+    sp.add_argument("--numbering", choices=["chapter", "decimal", "gov", "none"], default=None,
+                    help="章节编号形态：chapter=第X章/1.1；decimal=1/1.1；gov=一、/（一）/1.；none=不编。"
+                         "不给就跟登记的公司版式，没登记用 chapter（招标文件对编号有要求时明给）")
+    sp.add_argument("--toc-depth", type=int, choices=[1, 2, 3, 4], default=None,
+                    help="目录层级（静态条目与 TOC 域刷新口径一致）。不给就跟登记的公司版式，没登记用 3 级")
     sp.add_argument("--flat-outline", action="store_true",
                     help="节内小标题摘出导航大纲（outlineLvl=9）：导航窗格降噪，代价是"
                          "导航全扁平、F9 刷目录丢二级以下条目——默认关闭")
-    sp.add_argument("--template", help="版式模板 docx（缺省用包内基准模板；用户模板的"
-                                       "页面设置与页眉页脚原样保留）")
+    sp.add_argument("--template", help="版式模板 docx（缺省：登记了公司版式就按公司版式出，没登记用包内基准模板；"
+                                       "显式给了模板就不按公司版式，模板的页面设置与页眉页脚原样保留）")
+    sp.add_argument("--ignore-layout", action="store_true",
+                    help="本次不按登记的公司版式出，用内置版式（用户明说「这次不用公司版式」时才加）")
     sp.add_argument("--allow-format-change", default="",
                     help="用户已在对话里明确同意改表格式的节名，逗号分隔（节文件名主干）——"
                          "格式件保真核对对这些节放行；擅自改招标格式件是废标级红线，无用户同意不得使用")
@@ -5112,15 +8578,47 @@ def main() -> None:
     sp.set_defaults(func=cmd_image_rotate)
 
     sp = sub.add_parser("inspect", help="文档检查（只读）：金额验算、表格版式、图片、内部编号与占位、修订痕迹等，"
-                                         "出文字结论 + 一张表；不改文件、不拦流程")
+                                         "出文字结论 + 一张表；不改被检查的文件、不拦流程")
     sp.add_argument("docx", nargs="*", help="要检查的 docx，可多份（各处写的总价会放在一起对账）")
     sp.add_argument("--work", default=None, help="检查整套工作区的整本 Word 文档（含整本与节文件的对账）")
     sp.add_argument("--draft", action="store_true", help="按写作中的稿子查：不把还没处理的批注当问题")
-    sp.add_argument("--json", default=None, help="结果落盘 JSON（控制台输出不变）")
+    sp.add_argument("--json", default=None, metavar="结果.json",
+                    help="把检查结果写成 JSON 文件——后面跟落盘路径（须 .json，如 work/review/inspect-result.json），"
+                         "不是开关；不给就只打印、不写任何文件")
     sp.set_defaults(func=cmd_inspect)
+
+    sp = sub.add_parser("layout-read", help="版式规格读取（只读）：把 Word 版历史标书读成版式规格表"
+                                         "（项目｜取值｜依据｜确定/疑似）+封面文字清单；不改被读取的文件")
+    sp.add_argument("files", nargs="+", help="历史标书 .docx/.doc（PDF 等读不准字体与磅值，不收）")
+    sp.add_argument("--out", default=None, metavar="版式规格.md",
+                    help="把版式规格表写成文件——后面跟落盘路径（须 .md）；缺省只打印。取值经用户确认后"
+                         "交给 layout-adopt 登记为公司版式")
+    sp.add_argument("--json", default=None, metavar="读取结果.json",
+                    help="把读取结果写成 JSON 文件——后面跟落盘路径（须 .json，如 work/review/layout-read.json）；"
+                         "不给就只打印")
+    sp.set_defaults(func=cmd_layout_read)
+
+    sp = sub.add_parser("layout-adopt", help="登记公司版式：把确认后的版式规格表登记为本机的默认版式，"
+                                          "之后建节、合册不指定模板就自动按它出")
+    sp.add_argument("spec", help="版式规格表 .md（layout-read --out 落盘的那份，或登记目录里的 layout.md）")
+    sp.add_argument("--source", default=None,
+                    help="历史标书 .docx——连封面整页与页眉（logo／文字／横线）一起提取存进登记目录；"
+                         "与 --out 规格表读自同一份文件。不给则封面与页眉暂不接上")
+    sp.add_argument("--name", default=None, help="版式的叫法（缺省取规格表来源行里的文件名）")
+    sp.add_argument("--set", action="append", metavar="项目=取值", default=[],
+                    help="对话修订：把某一项目的取值换成用户说的（如 '标题一级=中文黑体、西文 Times New Roman｜"
+                         "三号（16 磅）｜加粗｜居中'），写法要跟规格表一致；可重复")
+    sp.set_defaults(func=cmd_layout_adopt)
+
+    sp = sub.add_parser("layout-show", help="查看登记的公司版式（用户问「现在用的什么版式」）")
+    sp.set_defaults(func=cmd_layout_show)
+
+    sp = sub.add_parser("layout-forget", help="取消公司版式登记（用户说「别用公司版式了」）；原规格表留档")
+    sp.set_defaults(func=cmd_layout_forget)
 
     args = ap.parse_args()
     require_docx()  # --help 已在 parse_args 内退出，这里才真正需要 python-docx
+    activate_layout(args)  # 出文档的命令先定本次按不按登记的公司版式出
     if args.cmd in ("create", "revise", "comment", "image", "copy-from", "compact", "image-rotate"):
         _body_write_gate(getattr(args, "target", None) or getattr(args, "path", None)
                          or getattr(args, "docx", None))

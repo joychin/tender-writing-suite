@@ -57,7 +57,10 @@ CONV_CN = {
 
 
 def die(msg: str, code: int = 1):
-    print(f"[解析失败] {msg}")
+    first, *rest = str(msg).split("\n")
+    print(f"[解析失败] {first}")
+    for ln in rest:  # 多行消息（如 .doc 的回退指引）：续行缩进对齐，不散落成正文
+        print(f"           {ln}")
     sys.exit(code)
 
 
@@ -419,12 +422,179 @@ def _find_soffice() -> str | None:
     return None
 
 
-def _doc_to_docx(src: Path, out_root: Path) -> Path:
-    """.doc → docx（LibreOffice 无头转换，落 out_root/_converted.docx）。"""
+# 脚本内置的自动转换只有 LibreOffice（本机唯一实测过的通道）。没有它时「.doc → .docx」
+# 交给模型选办法：这里只把「本机装了哪些能打开 .doc 的 Office 套件」探出来写进提示，
+# 不替它调用——Word/WPS 的自动化各平台各版本差异大，没在真机验证过的不内置
+# （WPS for Mac 实测没有脚本接口；Windows 的自动化接口只能在 mac 上模拟）。
+# 下面这一段在套件里共三份（脱敏 strip_metadata、解析 parse_document、版式读取
+# docx_toolkit）——环节技能各自独立安装不共享模块，改一处同步三处，
+# engine_smoke E76g 钉住三份逐字一致。
+_MAC_OFFICE = (("Microsoft Word", "Microsoft Word.app"), ("WPS Office", "wpsoffice.app"),
+               ("Pages", "Pages.app"))
+_WIN_PROGID = (("Microsoft Word", "Word.Application"), ("WPS Office", "KWPS.Application"))
+
+
+def _installed_office() -> list[str]:
+    """本机已安装、能把 .doc 另存为 .docx 的 Office 套件名（去重保序）。只做存在性探测：
+    macOS 看应用包，Windows 看自动化接口的注册；探测出错或别的系统返回空——只是少一条线索。"""
+    found: list[str] = []
+    try:
+        if sys.platform == "darwin":
+            for root in ("/Applications", os.path.expanduser("~/Applications")):
+                for name, bundle in _MAC_OFFICE:
+                    if name not in found and os.path.isdir(os.path.join(root, bundle)):
+                        found.append(name)
+        elif sys.platform == "win32":
+            import winreg
+            for name, progid in _WIN_PROGID:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, progid):
+                        found.append(name)
+                except OSError:
+                    continue
+    except Exception:  # noqa: BLE001
+        pass
+    return found
+
+
+def _hand_over_hint(why: str, next_step: str) -> str:
+    """没有 LibreOffice 时给模型的回退指引：转换这一步交它选办法，后面的事仍由脚本接着做。
+    why 说这份脚本为什么只认 .docx，next_step 说转好之后怎么接。"""
+    found = _installed_office()
+    if found:
+        tools = ("转换这一步交给你选办法（宿主自带的文档转换能力也算）。本机检测到已装："
+                 + "、".join(found) + "。\n"
+                 "能用就自动化另存——Windows 上 Word/WPS 有自动化接口，macOS 上 Word、Pages 可脚本化，"
+                 "WPS for Mac 实测没有脚本接口；不能自动化就请用户在里面对话框另存。\n")
+    else:
+        tools = ("转换这一步交给你选办法（宿主自带的文档转换能力也算）。"
+                 "本机没检测到常见的 Office 套件（Word / WPS / Pages）。\n")
+    return ("这份是 .doc（旧版二进制格式），" + why + "；本机没有找到 LibreOffice，脚本内置的自动转换只有它。\n"
+            + tools + next_step)
+
+
+# 超过这条线的 .doc 不自动转换（用户 2026-11-27 定：超过 5M 的提醒用户自己转换）。起因是
+# 真机上一份 26.7MB 的 .doc 让 LibreOffice 转满 300 秒超时，模型随后把文字抽出来自己拼了
+# 一份丢光版式的 docx 交回来——大文件既不耗那 300 秒，也不请模型另想办法。5MB 是用户定的
+# 值、不是标定值：本机 9 份真实 .doc 实测 5.4–23.6MB 的都是 2–3 秒转完，只有那一份转不出来。
+# 这一段同样三份逐字同口径（engine_smoke E79f 钉住）。
+_DOC_AUTO_LIMIT = 5_000_000
+
+
+def _oversize_doc_hint(size_bytes: int, next_step: str) -> str:
+    """超过 _DOC_AUTO_LIMIT 的 .doc 的提示：不自动转换，也不请模型另想办法，请用户自己另存。
+    next_step 说转好之后怎么接。"""
+    return (f"这份 .doc 有 {size_bytes / 1_000_000:.1f}MB，超过 5MB：脚本不自动转换——LibreOffice 转大文件"
+            "可能很久都转不完（实测一份 26.7MB 的跑满 28 分钟没转出来），另想办法转又容易丢表格和"
+            "版式。\n"
+            "请用户在 Word/WPS 里打开原文件另存为 .docx，这一步不要替用户自动化。\n"
+            + next_step)
+
+
+def _doc_too_big(path) -> bool:
+    """这份 .doc 是否超过自动转换的大小线；取不到大小就当没超，照常走后面的判断。"""
+    try:
+        return os.stat(path).st_size > _DOC_AUTO_LIMIT
+    except OSError:
+        return False
+
+
+# LibreOffice 转换的时限，与超时之后的处置（用户 2026-11-27 定：转换超时就 kill 掉，然后提醒用户）。
+# 起因是真机上一份 .doc 让 LibreOffice 的排版陷进死循环：进程占满一个核、永不结束。两个要点：
+# ①杀要杀整棵进程树——soffice 启动器在 Linux／Windows 上只是外壳，真正干活的是它拉起来的
+# soffice.bin，只杀外壳会把干活的留在后台继续空转；②提醒的是用户不是模型——真机上模型被请去
+# 「换一种办法」，交回来的是把文字抽出来重新拼的、丢光版式的 docx。300 秒是经验值：本机 10 份
+# 能转的真实 .doc 最慢 38 秒，转不出的那一份 28 分钟也没出来。这一段同样三份逐字同口径
+# （engine_smoke E80 钉住）。
+_LO_TIMEOUT = 300
+
+
+class _LoTimeout(Exception):
+    """LibreOffice 转换超过时限没结束；抛出时进程树已经杀干净。"""
+
+
+def _kill_tree(proc) -> None:
+    """杀掉 proc 和它拉起来的全部子进程。POSIX 下 proc 起在独立进程组里（见 _run_lo），整组
+    SIGKILL；Windows 没有进程组信号，用 taskkill /T 按进程树强杀。哪一步出错都不抛，最后都补一刀
+    proc.kill()。"""
+    import signal
+    import subprocess
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True,
+                           timeout=30, check=False)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _run_lo(cmd: list, seconds: int):
+    """起 LibreOffice 转换并等它结束，返回 CompletedProcess（stdout／stderr 已按本机代码页宽松
+    解码，并滤掉 macOS soffice 每次先吐的系统噪音行）；超过 seconds 秒没结束就把进程树杀干净，
+    抛 _LoTimeout。起不来（找不到可执行文件等）时抛 OSError，由调用方当转换失败处理。"""
+    import subprocess
+
+    def quiet(text):
+        return "".join(ln for ln in (text or "").splitlines(keepends=True) if "Task policy set failed" not in ln)
+
+    kw = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True, "errors": "replace"}
+    if sys.platform != "win32":
+        kw["start_new_session"] = True    # 自成进程组：超时后才能整组杀，不牵连本脚本自己
+    proc = subprocess.Popen(cmd, **kw)
+    try:
+        out, err = proc.communicate(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=30)  # 回收并关掉管道；万一还有活口占着管道，也不让这里卡住
+        except Exception:  # noqa: BLE001
+            pass
+        raise _LoTimeout(seconds) from None
+    return subprocess.CompletedProcess(cmd, proc.returncode, quiet(out), quiet(err))
+
+
+def _stuck_doc_hint(what: str, next_step: str) -> str:
+    """LibreOffice 转不出这份 .doc 时给模型的提示：转换已终止，请用户自己另存，不请模型另想办法。
+    what 说这次是怎么回事（超时还是失败），next_step 说转好之后怎么接。"""
+    return (f"LibreOffice 转换这份 .doc{what}，已终止——多半是个别图片／绘图对象的数据不规范，"
+            "LibreOffice 排版排不出来，与文件大小无关。\n"
+            "请用户在 Word/WPS 里打开原文件另存为 .docx；这一步不要替用户自动化，也不要另想办法转"
+            "（把文字抽出来重新拼的 docx 会丢光表格和版式）。\n"
+            + next_step)
+
+
+def _doc_to_docx(src: Path, out_root: Path, handoff: Path | None = None) -> Path:
+    """.doc → docx，落 out_root/_converted.docx（后续按行号拷贝格式件时从这里取）。
+
+    模型用自选办法转好的 docx（handoff）直接采用；没给才找 LibreOffice——脚本内置的
+    自动转换只有它，没有它时把「怎么转」交给模型（LibreOffice 不是前提）。
+    """
+    target = out_root / "_converted.docx"
+    if handoff is not None:
+        out_root.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(handoff.read_bytes())
+        return target
+    def give_up(what: str) -> None:
+        """LibreOffice 转不出这份 .doc（超时或失败）时的唯一出口：请用户自己另存，转好带 --converted 回来。"""
+        die(_stuck_doc_hint(
+            what,
+            f"转好后带上 --converted <那份 .docx> 重跑本命令（如 parse_document.py \"{src.name}\" "
+            f"--converted \"{src.stem}.docx\"），解析仍由脚本做——来源登记、解析目录与后续按行号"
+            "拷贝格式件都照原样走；原 .doc 不用动。"), 2)
+
     soffice = _find_soffice()
     if not soffice:
-        die(".doc 解析需要 LibreOffice 自动转换：未检测到 soffice。"
-            "请安装 LibreOffice（默认安装位置会自动识别），或将文件用 Word/WPS 另存为 .docx 后重试")
+        die(_hand_over_hint(
+            "解析器只认 .docx，得先把它转成 .docx",
+            f"转好后带上 --converted <那份 .docx> 重跑本命令（如 parse_document.py \"{src.name}\" "
+            f"--converted \"{src.stem}.docx\"），解析仍由脚本做——来源登记、解析目录与后续按行号"
+            "拷贝格式件都照原样走；原 .doc 不用动。本机确实没有可用的转换方式时，"
+            "再请用户在 Word/WPS 里另存为 .docx。"), 2)
     out_root.mkdir(parents=True, exist_ok=True)
     # 配置目录地址必须由 as_uri 生成：绝对路径，否则 file:// URL 失效、soffice 挂起；
     # 手工拼 file://+路径 在 Windows 上是坏地址（盘符冒号、反斜杠），含空格/# 也不转义
@@ -432,13 +602,14 @@ def _doc_to_docx(src: Path, out_root: Path) -> Path:
     cmd = [soffice, "--headless", f"-env:UserInstallation={profile.as_uri()}",
            "--convert-to", "docx", "--outdir", str(out_root), str(src)]
     try:
-        subprocess.run(cmd, capture_output=True, timeout=300, check=False)
-    except subprocess.TimeoutExpired:
-        die("LibreOffice 转换超时（300s）。请手工另存为 .docx 后重试")
+        _run_lo(cmd, _LO_TIMEOUT)
+    except _LoTimeout:
+        give_up(f" 超时（超过 {_LO_TIMEOUT} 秒没转完）")
+    except OSError as exc:
+        give_up(f" 失败（LibreOffice 起不来：{exc}）")
     produced = out_root / (src.stem + ".docx")
     if not produced.is_file():
-        die("LibreOffice 转换未产出文件（可能版本不兼容）。请手工另存为 .docx 后重试")
-    target = out_root / "_converted.docx"
+        give_up(" 失败（没产出文件，可能版本不兼容）")
     target.write_bytes(produced.read_bytes())
     produced.unlink()
     return target
@@ -569,6 +740,18 @@ def artifacts_consistent(out_root: Path, stem: str, is_docx: bool, old: dict,
     return True, ""
 
 
+def _load_old_meta(meta_path: Path, sha: str) -> dict | None:
+    """上次解析的登记：文件在、读得出、且记的就是现在这份源文件（sha256 一致）才返回，否则 None
+    （meta 损坏视为无，走全量重析）。"""
+    if not meta_path.is_file():
+        return None
+    try:
+        old = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return old if isinstance(old, dict) and old.get("sha256") == sha else None
+
+
 def print_summary(tag: str, name: str, out_root: Path, meta: dict) -> None:
     parts = [f"约 {meta['chars']:,} 字符"]
     if meta.get("pages"):
@@ -592,6 +775,9 @@ def main() -> None:
     ap.add_argument("-o", "--out-dir", default="work/parse", help="输出根目录（默认 work/parse）")
     ap.add_argument("--page-cap", type=int, default=SCAN_PAGE_CAP,
                     help=f"扫描件视觉转写页数上限（默认 {SCAN_PAGE_CAP}）")
+    ap.add_argument("--converted", default=None, metavar="转换件.docx",
+                    help="这份 .doc 已经转成的 .docx（本机没有 LibreOffice，或这份 .doc 超过 5MB、脚本不自动转时用）："
+                         "解析仍按 .doc 源登记，转换件落到解析目录供后续按行号拷贝格式件")
     args = ap.parse_args()
 
     src = Path(args.input)
@@ -608,29 +794,57 @@ def main() -> None:
     meta_path = out_root / (stem + ".meta.json")
     transcript_path = out_root / (stem + ".transcript.md")
 
+    handoff: Path | None = None   # 模型用自选办法把这份 .doc 转好的 docx（--converted）
+    if args.converted:
+        handoff = Path(args.converted)
+        if suffix != ".doc":
+            die(f"--converted 只在源文件是 .doc 时用（它是这份 .doc 转出来的 .docx），这份是 {src.name}", 2)
+        if not handoff.is_file():
+            die(f"--converted 指向的文件不存在：{handoff}", 2)
+        if handoff.suffix.lower() != ".docx":
+            die(f"--converted 须指向 .docx 文件：{handoff.name}", 2)
+        with open(handoff, "rb") as fh:
+            if fh.read(2) != b"PK":
+                die(f"--converted 指向的不是 Word 文档（文件头不是 ZIP）：{handoff.name}", 2)
+
     parse_src = src
     is_docx = suffix == ".docx"
     conv_warnings: list[str] = []
-    if suffix == ".doc":
-        parse_src = _doc_to_docx(src, out_root)
-        is_docx = True
-        conv_warnings.append("源为 .doc：已经 LibreOffice 转换为 docx 解析（版式/图片可能失真），"
-                             "交付级内容请核对原件")
-
     sha = sha256_of(src)
-    if meta_path.is_file():
-        try:
-            old = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            old = None  # meta 损坏视为无，走全量重析
-        if old is not None and old.get("sha256") == sha:
-            extra = [transcript_path] if old.get("conversion") == "pdf-scanned-transcript" else []
-            ok, reason = artifacts_consistent(out_root, stem, is_docx, old, extra)
-            if ok:
-                print_summary("解析跳过", src.name, out_root, old)
-                print("  内容未变化（sha256 一致），沿用已有产物")
-                return
-            print(f"[解析重建] {reason}——源文件未变，重新解析并恢复产物")
+
+    # 已解析过且产物完好：既没有 LibreOffice 也没人交接力时照样沿用，不必再找转换件；
+    # 超过自动转换大小线的 .doc 同理（下面不会再去转它）
+    if suffix == ".doc" and handoff is None and (not _find_soffice() or _doc_too_big(src)):
+        old = _load_old_meta(meta_path, sha)
+        if old is not None and (out_root / "_converted.docx").is_file() \
+                and artifacts_consistent(out_root, stem, True, old)[0]:
+            print_summary("解析跳过", src.name, out_root, old)
+            print("  内容未变化（sha256 一致），沿用已有产物")
+            return
+
+    if suffix == ".doc" and handoff is None and _doc_too_big(src):
+        die(_oversize_doc_hint(
+            os.stat(src).st_size,
+            f"转好后带上 --converted <那份 .docx> 重跑本命令（如 parse_document.py \"{src.name}\" "
+            f"--converted \"{src.stem}.docx\"），解析仍由脚本做——来源登记、解析目录与后续按行号"
+            "拷贝格式件都照原样走；原 .doc 不用动。"), 2)
+
+    if suffix == ".doc":
+        parse_src = _doc_to_docx(src, out_root, handoff)
+        is_docx = True
+        conv_warnings.append("源为 .doc：" + ("已用 --converted 交来的 docx 解析" if handoff is not None
+                                              else "已经 LibreOffice 转换为 docx 解析")
+                             + "（版式/图片可能失真），交付级内容请核对原件")
+
+    old = _load_old_meta(meta_path, sha)
+    if old is not None:
+        extra = [transcript_path] if old.get("conversion") == "pdf-scanned-transcript" else []
+        ok, reason = artifacts_consistent(out_root, stem, is_docx, old, extra)
+        if ok:
+            print_summary("解析跳过", src.name, out_root, old)
+            print("  内容未变化（sha256 一致），沿用已有产物")
+            return
+        print(f"[解析重建] {reason}——源文件未变，重新解析并恢复产物")
 
     L = Lines()
     pages = None

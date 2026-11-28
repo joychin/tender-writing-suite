@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document and list the disqualification risks"
   - "Turn the scoring criteria and eligibility thresholds into tables"
   - "Plan the bid response outline for this project"
-version: 2.2.4
+version: 2.4.2
 author: 灵燕智能
 ---
 
@@ -56,12 +56,23 @@ author: 灵燕智能
    等 `parse_document.py` 不收的格式时，用环境可用的表格工具读取，把表名/
    关键字段/金额结构摘进 analysis；做不到就在报告与指针里点名「该附件未入库，
    需人工提供或确认」，不许只在收尾提一句。
+   **源文件是 `.doc`**：先转成 `.docx` 才能解析。**超过 5MB 的 `.doc` 脚本不自动转**
+   （LibreOffice 转大文件可能很久都转不完）：脚本直接退出（退出码 2），请用户在 Word/WPS
+   里另存为 `.docx`，这一步不要替用户自动化；转好后带 `--converted <那份 .docx>` 重跑
+   解析。5MB 以内：脚本先找本机 LibreOffice，找到就自动转（超过 300 秒没转完或转换失败时，
+   脚本会终止转换并退出，同样请用户另存后带 `--converted` 重跑）；没找到会列出检测到的 Office
+   套件后退出（退出码 2）——由你选本机最可行的办法转成 `.docx`（Word、WPS、Pages 的
+   自动化另存或导出，宿主自带的文档转换能力），转好后同样带 `--converted <那份 .docx>`
+   重跑解析，来源登记与解析目录照原样走；都没有再请用户另存为 `.docx`。LibreOffice
+   体积大、不少用户装不了，不要一上来就让用户安装。
+   已经解析过且产物完好时，没有转换器也直接沿用。
 3. **G1 门（异常门——仅异常时停轮）**：解析无警示且来源角色已决 → **不产报告
    不停轮**，直接进第二步（解析概况并入 G2 的报告与指针交付）；有解析警示
    （识别降级/可信度低/扫描件待誊录）或来源角色未决 → 待确认事项登记
    `work/analysis/clarifications.md`（编号与第二步续排），生成分析报告
    （`python3 tender-review/scripts/build_review.py --work work --pages report`）
-   交付即停——概况与警示全量在报告，对话只留指针。
+   交付即停——交付链接用回显的 [交付链接]（分析报告页直链；服务未起时为静态文件
+   路径），概况与警示全量在报告，对话只留指针。
 
 ## 第二步：要点提取
 
@@ -70,7 +81,8 @@ author: 灵燕智能
 `python3 tender-writing/scripts/check_writing.py --analysis` 校验
 （coverage 与出处引用；`--work` 默认 `work`）。定位纪律：行号区间或关键词检索，**行号区间精读取证，
 禁止整读解析 md**。过 G2 门：刷新分析报告（正常路径的首次报告交付——第一节
-概况表即解析结论）；对话指针开头带解析概况一句（主文件/规模/识别方式），关键
+概况表即解析结论；交付链接用 build_review 回显的 [交付链接]＝分析报告页直链，
+评审台是 G3 起的确认面，勿拿评审台链接标成报告交付）；对话指针开头带解析概况一句（主文件/规模/识别方式），关键
 要点（废标最严几条、评分框架、
 资格硬门槛）在对话给结论级摘要（只述事实与出处，不作商业评价），六张分析表与
 澄清清单全量只在报告；澄清处理用 `python3 tender-review/scripts/apply_review.py`

@@ -249,7 +249,7 @@ def main() -> None:
         m = re.search(r"^version:\s*(\S+)",
                       (pkg / "SKILL.md").read_text(encoding="utf-8"), re.M)
         versions[pkg.name] = m.group(1) if m else "(缺)"
-    # 版本一致性：五个 SKILL.md 必须同版（README 维护约定），漂移会让打包产物版本语义失真
+    # 版本一致性：六个 SKILL.md 必须同版（README 维护约定），漂移会让打包产物版本语义失真
     if len(set(versions.values())) > 1:
         detail = "、".join(f"{k}={v}" for k, v in sorted(versions.items()))
         problems.append(f"SKILL.md 版本不一致：{detail}——同步递增后再打包")

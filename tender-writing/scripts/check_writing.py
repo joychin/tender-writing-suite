@@ -58,8 +58,9 @@ def _sibling_scripts(name: str) -> Path:
 _DOCX_SCRIPTS = _sibling_scripts("tender-docx")
 sys.path.append(str(_DOCX_SCRIPTS))
 from docx_toolkit import (  # noqa: E402
-    allow_format_set, build_tree, cell_text_full, format_fidelity, format_findings, inspect_docx,
-    inspect_files, iter_blocks, para_text_full, parse_outline, require_docx, sanitize_name,
+    _work_docx, allow_format_set, build_tree, cell_text_full, format_fidelity, format_findings,
+    guard_dump_path, inspect_docx, inspect_files, iter_blocks, para_text_full, parse_outline,
+    require_docx, sanitize_name,
 )
 
 # python-docx 惰性加载：顶层 import 会让未装依赖的环境（沙箱评测、纯净解释器）
@@ -1035,14 +1036,21 @@ def main() -> None:
                     help="目录来源标注对账（悬空/未引用来源ID）")
     ap.add_argument("--section", help="单节自查（.docx 路径）")
     ap.add_argument("--old-names", default="", help="残留扫描旧名清单（逗号分隔）")
-    ap.add_argument("--json", default="", help="结果落盘 JSON（写作进度面板读它展示；"
-                        "推荐 work/review/check-result.json，控制台输出与退出码不变）")
+    ap.add_argument("--json", default="", metavar="结果.json",
+                    help="把校验结果写成 JSON 文件——后面跟落盘路径（须 .json；写作进度面板读它展示，"
+                         "推荐 work/review/check-result.json），不是开关；控制台输出与退出码不变")
     ap.add_argument("--allow-format-change", default="",
                     help="用户已在对话里明确同意改表格式的节名，逗号分隔（节文件名主干）——"
                          "格式件保真核对对这些节放行；擅自改招标格式件是废标级红线，无用户同意不得使用")
     args = ap.parse_args()
     _load_docx()  # --help 已在 parse_args 内退出；本命令全部校验都读 docx
     work = Path(args.work)
+    if args.json:
+        # --json 是结果落盘路径（.json），不是开关：指到节文件或整本上，校验跑完就把它覆盖
+        # 了。防呆放在一切校验之前——拦下时什么都还没读（与 docx_toolkit inspect 同一道闸）
+        guard_dump_path(args.json, [Path(args.section)] if args.section else _work_docx(work),
+                        ".json", "--json",
+                        hint="check_writing.py --work work --json work/review/check-result.json")
     allow = allow_format_set(args.allow_format_change)
 
     if args.guide:

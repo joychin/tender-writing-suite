@@ -269,6 +269,11 @@ def _structure_payload(work: Path) -> dict | None:
     return {"rows": rows, "coverage": _coverage_of(text)}
 
 
+PROSE_MEGA_CHARS = 300  # 经验值：按条款分行的散文行一般不超 200 字（qszbh260186 夹具约 150）；
+# 真机事故样本 708 字（云栖工程，约 10 个条款连排一个物理行）——报告页按源行分段（一行源文本
+# =一个 <p>），超过该值按「挤成一团」回显软提醒，只提醒不拦流程、不改退出码
+
+
 def _fmt_payload(work: Path) -> dict | None:
     """requirements-format.md 三节全量：一、结构要求（散文+嵌套大纲）；二、必须章节表；三、模板表。"""
     text = _read(work / "analysis/requirements-format.md")
@@ -585,7 +590,8 @@ def main() -> None:
     ap.add_argument("--work", default="work", help="工作目录（默认 work）")
     ap.add_argument("--out", default="", help="输出路径（默认 <work>/review/评审台.html）")
     ap.add_argument("--pages", choices=["all", "report"], default="all",
-                    help="report=只产分析报告（分析阶段 G1/G2）；all=连评审台一起（G3 目录确认起）")
+                    help="report=只产分析报告（分析阶段 G1/G2，[交付链接]=报告页直链/静态路径）；"
+                         "all=连评审台一起（G3 目录确认起，[交付链接]=评审台+锚点）")
     ap.add_argument("--open-progress", action="store_true",
                     help="首开写作进度面板（第五步首节开写前的第一动作）：按 --pages all "
                          "构建后落首开标记 work/review/.progress-opened 并打印面板链接回显——"
@@ -602,6 +608,15 @@ def main() -> None:
     report.write_text(render_report(payload, workbench=with_workbench), encoding="utf-8")
     tail = "，页脚含评审台回链" if with_workbench else ""
     print(f"[分析报告已生成] {report}（只读展示产物——分析阶段的唯一交付面，可转发{tail}）")
+    mega = [(i + 1, len(p)) for i, p in enumerate((payload.get("fmt") or {}).get("prose") or [])
+            if len(p) > PROSE_MEGA_CHARS]
+    if mega:
+        detail = "、".join(f"第{n}段{c}字" for n, c in mega[:3])
+        if len(mega) > 3:
+            detail += f"等共 {len(mega)} 段"
+        print(f"[结构要求超长段] {detail}——报告页按源行分段，整段连排会挤成一团没法逐条看；"
+              f"把 {work}/analysis/requirements-format.md「一、」的概括描述按条款拆行"
+              "（一条要求一行、各带出处，▲无效条款单独成行）后重跑本命令重出页面。")
     if args.pages == "all":
         out = Path(args.out) if args.out else work / "review" / WORKBENCH_FILENAME
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -630,11 +645,24 @@ def main() -> None:
                       f"[打开写作进度面板]({link})。链接后带一句预期管理："
                       "「正文开始连续生成，进度随时在这个面板看；写完或遇到要你定的事我再停」。")
     base = _serve_base(work)
-    if base:
-        print(f"[交付链接] {base}?v={fingerprint(work)[:8]}"
-              "（带版本参数——宿主预览面板对相同 URL 不重新加载，带参链接点击即强制重载出最新数据；"
-              "按门追加锚点 #tab=tree / #tab=guide / #tab=promise / #tab=overview；"
-              "每道门重跑本命令后复制新的回显链接，勿复用旧链接）")
+    fp8 = fingerprint(work)[:8]
+    if args.pages == "report":
+        # 分析阶段（G1 异常门 / G2）交付面＝报告页本身：[交付链接] 给报告页直链或静态路径
+        if base:
+            print(f"[交付链接] {base}report.html?v={fp8}"
+                  "（分析报告页直链，带版本参数——宿主预览面板对相同 URL 不重新加载，"
+                  "带参链接点击即强制重载出最新数据；文案写「打开招标文件分析报告」；"
+                  "评审台链接由全量构建回显，勿拿本链接当评审台交付）")
+        else:
+            print(f"[交付链接] {report}（报告页静态文件，浏览器直接打开即可交付；"
+                  "要在线直链先跑 serve_review.py 起服务，再重跑本命令）")
+    elif base:
+        print(f"[交付链接] {base}?v={fp8}"
+              "（评审台，带版本参数——宿主预览面板对相同 URL 不重新加载，"
+              "带参链接点击即强制重载出最新数据；按门追加锚点 #tab=tree / #tab=guide / "
+              "#tab=promise / #tab=overview；每道门重跑本命令后复制新的回显链接，勿复用旧链接）")
+        print(f"[报告页链接] {base}report.html?v={fp8}"
+              "（分析报告页直链——给用户看报告全量时照抄本行，勿拿评审台链接改标签）")
     else:
         print("[交付链接] 服务未起，暂不可用——先跑 serve_review.py 起服务，"
               "再重跑本命令取带 ?v= 的交付链接（服务模式 GET 实时读盘，"

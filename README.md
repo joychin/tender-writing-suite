@@ -8,7 +8,7 @@
 **已在多份真实标书的完整编写中实战使用——每个版本都由真实项目复盘打磨而来。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.2.4-blue.svg)](listing/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.4.2-blue.svg)](listing/CHANGELOG.md)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-informational)
 ![Offline](https://img.shields.io/badge/%E7%BD%91%E7%BB%9C-%E7%BA%AF%E6%9C%AC%E5%9C%B0%E8%BF%90%E8%A1%8C-success)
 
@@ -55,8 +55,8 @@ flowchart LR
     G --> H["⑦ 合册整本<br/>自动编号 +<br/>目录实测页码"]
 ```
 
-每个环节的详细纪律在 [`tender-writing-suite/references/`](tender-writing-suite/references/)，
-共 12 份方法论文档，Agent 按需读取。
+每个环节的详细纪律在 [`tender-writing-suite/references/`](tender-writing-suite/references/) 与
+各环节技能的 `references/`，共 13 份方法论文档，Agent 按需读取。
 
 ## 产出长什么样
 
@@ -72,7 +72,9 @@ flowchart LR
 | ![架构图](docs/demo-arch.png) | ![团队表](docs/demo-team.png) |
 
 此外还有：表格引擎支持合并单元格（横跨/竖并）、相对列宽、宽表横向页、行不跨页拆断；
-历史标书素材元素级保真拷贝；目录页码可导出「标题→页码」映射（评分索引表回填用）。
+历史标书素材元素级保真拷贝；目录页码可导出「标题→页码」映射（评分索引表回填用）；
+给一份 Word 版历史标书，能把它的版式（字体字号、行距、页面、表格、目录、页码）读成
+一张版式规格表，确认后登记为公司版式——后面的标书自动按它出，改版式在对话里说一声就行。
 收尾会给出沉淀建议：成品标书与公司事实归入你的资料库/知识库后，下次自动成为
 可检索素材——越用越快。
 
@@ -88,10 +90,11 @@ pip install python-docx pypdfium2 docxcompose Pillow
 
 - **上架/分发形态（推荐）**：上传或导入 `out-zips/tender-writing-suite-<版本>.zip`
   ——单技能扁平包（`SKILL.md` + `references/` + `scripts/` + `templates/`，两级目录），
-  一次装完即含全部四个环节；
-- **开发形态**：把五个目录（`tender-writing-suite/`、`tender-analysis/`、
-  `tender-writing/`、`tender-review/`、`tender-docx/`）平级放进技能目录——仅供调试
-  单个环节，脚本按「扁平 → 平级 → `stages/`」三形态自动解析兄弟模块。
+  一次装完即含全部五个环节；
+- **开发形态**：把六个目录（`tender-writing-suite/`、`tender-analysis/`、
+  `tender-writing/`、`tender-review/`、`tender-docx/`、`tender-sanitize/`）平级放进
+  技能目录——仅供调试单个环节，脚本按「扁平 → 平级 → `stages/`」三形态自动解析
+  兄弟模块。
 
 打包产物由 `listing/build_package.py` 装配（平台硬限制：Skill 只允许两级目录，
 三级嵌套会被「目录层级超限」拒绝）。
@@ -108,9 +111,9 @@ pip install python-docx pypdfium2 docxcompose Pillow
 
 ## 技能包结构
 
-仓库里是**开发形态**：五个目录平级，入口装纪律与路由，环节装各自流程，脚本按引擎成组归位。
+仓库里是**开发形态**：六个目录平级，入口装纪律与路由，环节装各自流程，脚本按引擎成组归位。
 上架产物只有一个扁平包（见 `out-zips/tender-writing-suite-<版本>.zip`）：`SKILL.md` 在根，
-四环节 `SKILL.md` 转成 `references/stage-*.md`，脚本与模板全部拍平进 `scripts/`、`templates/`。
+五环节 `SKILL.md` 转成 `references/stage-*.md`，脚本与模板全部拍平进 `scripts/`、`templates/`。
 
 ```text
 tender-writing-suite/          # 入口：红线 8 条 / 确认门 / 技能路由 / 工作目录约定
@@ -137,10 +140,18 @@ tender-review/                 # 确认面：报告 / 评审台 / 进度页 / �
 ├── scripts/                   # build_review / serve_review / apply_review
 └── templates/                 # 三套页面模板 + example-review-patch
 
-tender-docx/                   # 第七步：合册 / 目录页码 / 回流 / 收尾
+tender-docx/                   # 第七步：合册 / 目录页码 / 回流 / 收尾 / 公司版式（读取、登记、自动采用）
 ├── SKILL.md
+├── references/company-layout.md
 ├── scripts/                   # docx_toolkit / make_template
 └── templates/base-template.docx
+
+tender-sanitize/               # 随时可用：文档脱敏（Word/PDF 属性体检与清理）
+├── SKILL.md
+├── references/metadata-fields.md
+└── scripts/strip_metadata.py  # 体检 + 清理（docx 纯标准库；pdf 用 pypdf；.doc 先转 docx——
+                               #   5MB 以内本机有 LibreOffice 自动转，没有则由模型选办法；
+                               #   超过 5MB 的请用户自己另存）
 ```
 
 ## 设计原则
@@ -150,8 +161,9 @@ tender-docx/                   # 第七步：合册 / 目录页码 / 回流 / �
 - **纯本地运行**：全部脚本零网络请求，招标文件与公司素材不出本机。
 - **正文干净**：占位与待办一律走 Word 批注，交付稿里没有任何占位文字（机器扫描兜底）。
 - **能力边界如实说明**：扫描件（图片型 PDF）走视觉转写通道——解析器栅格化页图，
-  由模型逐页誊录（默认页数上限 40，需宿主具备读图能力）；`.doc` 检测到
-  LibreOffice 时自动转 docx 再解析；甘特图 / 架构图按真图阶梯出图：
+  由模型逐页誊录（默认页数上限 40，需宿主具备读图能力）；`.doc` 先转成 docx——5MB 以内
+  本机有 LibreOffice 自动转，没有则由模型选本机可用的办法（LibreOffice 不是必装），
+  超过 5MB 或转不出（超时）的请用户自己另存；甘特图 / 架构图按真图阶梯出图：
   `matplotlib` → 浏览器渲染 → 表格表达；公司事实与素材来自你的
   知识库 / 上传文件，不联网检索。
 

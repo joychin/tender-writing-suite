@@ -6,13 +6,13 @@
 `templates/` 四个位置、全部文件平铺。任何三级目录（原 stages/<环节>/scripts/x.py）
 都会解析失败。
 
-因此本构建器把五技能源目录装配成**单技能扁平包**：
+因此本构建器把六技能源目录装配成**单技能扁平包**：
 
     SKILL.md                     ← 入口（tender-writing-suite/SKILL.md）
     references/
-        stage-<环节>.md          ← 四个环节的 SKILL.md（去 frontmatter）
-        <方法论>.md              ← 五份 references/*.md 拍平（已校验无重名）
-    scripts/                     ← 八个脚本拍平（无重名）
+        stage-<环节>.md          ← 五个环节的 SKILL.md（去 frontmatter）
+        <方法论>.md              ← references/*.md 拍平（已校验无重名）
+    scripts/                     ← 九个脚本拍平（无重名）
     templates/                   ← 模板与页面拍平（无重名）
 
 改写（只改装配副本，仓库源目录不动）：
@@ -42,7 +42,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENTRY = "tender-writing-suite"
-STAGES = ("tender-analysis", "tender-writing", "tender-review", "tender-docx")
+STAGES = ("tender-analysis", "tender-writing", "tender-review", "tender-docx", "tender-sanitize")
 SHORT = {s: s.replace("tender-", "") for s in STAGES}
 VERSION_RE = re.compile(r"^version:\s*(\S+)", re.M)
 FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.S)
@@ -67,20 +67,20 @@ SCRIPT_REF = re.compile(r"([\w./-]*scripts/[\w.-]+\.py)")
 SCAN_SUFFIXES = {".md", ".html", ".json", ".py"}
 
 # ---- 整段替换 ----
-INTRO_OLD = """从招标文件到可递交的标书 Word。本技能是五技能套件的**入口与总控**：红线、
+INTRO_OLD = """从招标文件到可递交的标书 Word。本技能是六技能套件的**入口与总控**：红线、
 确认门、环节路由与工作目录约定都在本文件；具体环节由平级技能执行——进入哪步
 先载入该步点名的技能，再按那个技能的 SKILL.md 执行。
 
 套件构成：本技能（入口）、tender-analysis（解析分析）、tender-writing（写作）、
-tender-review（评审台）、tender-docx（合册交付）——发布为单包（环节在包内
-`stages/` 下）或五技能平级两种形态安装。"""
+tender-review（评审台）、tender-docx（合册交付）、tender-sanitize（文档脱敏）
+——发布为单包（环节在包内 `stages/` 下）或六技能平级两种形态安装。"""
 INTRO_NEW = """从招标文件到可递交的标书 Word。本技能是**唯一入口与总控**：红线、确认门、环节
 路由与工作目录约定都在本文件；具体环节细则收在同包的 `references/stage-*.md`，
 进入哪步就读那份细则并按它执行。
 
-包内四个环节：stage-analysis（解析分析）、stage-writing（写作）、stage-review
-（评审台）、stage-docx（合册交付）——脚本全在 `scripts/`、模板与页面全在
-`templates/`，一套包一次安装即可跑完全流程。"""
+包内环节：stage-analysis（解析分析）、stage-writing（写作）、stage-review
+（评审台）、stage-docx（合册交付）、stage-sanitize（文档脱敏）——脚本全在
+`scripts/`、模板与页面全在 `templates/`，一套包一次安装即可跑完全流程。"""
 
 # 「环节技能」是五技能布局的说法，扁平包里没有独立技能，统一改口
 PACKAGE_FIXES = (
@@ -92,7 +92,7 @@ CONV_HEADING = "## 跨技能路径约定"
 
 # 入口件在扁平包里的措辞修正（源文按五技能平级写的表述，单包内会误导执行）
 ENTRY_FIXES = (
-    ("本技能是五技能套件的入口与总控", "本技能是标书全流程套件的入口与总控"),
+    ("本技能是六技能套件的入口与总控", "本技能是标书全流程套件的入口与总控"),
     ("过门：载入下一环节技能不构成连跑授权。", "过门：读下一环节细则不构成连跑授权。"),
     ("存在（见各环节技能「上游检查」）", "存在（见各环节细则「上游检查」）"),
     ("- 环节技能被单独触发时自带上游检查：", "- 各环节自带上游检查："),
@@ -201,7 +201,7 @@ def main() -> int:
     shutil.rmtree(build_root, ignore_errors=True)
     (pkg / "references").mkdir(parents=True)
 
-    # ① 装配：入口 SKILL.md + 五份方法论细则 + 四环节（细则/脚本/模板全拍平）
+    # ① 装配：入口 SKILL.md + 入口细则 + 五环节（细则/脚本/模板全拍平）
     shutil.copy2(entry_dir / "SKILL.md", pkg / "SKILL.md")
     n_ref = copy_files(entry_dir / "references", pkg / "references", "*.md")
     for s in STAGES:

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from docx_toolkit import enable_footer_pagenum, require_docx, setup_styles  # noqa: E402
+from docx_toolkit import _scrub_metadata, enable_footer_pagenum, require_docx, setup_styles  # noqa: E402
 
 
 def main() -> None:
@@ -35,6 +35,7 @@ def main() -> None:
     sec.top_margin = sec.bottom_margin = Cm(2.54)
     sec.left_margin = sec.right_margin = Cm(3.18)
     enable_footer_pagenum(doc, different_first=True)
+    _scrub_metadata(doc)  # 模板自身也不带 python-docx 署名/Word 应用名/首页缩略图出包
     out = Path(__file__).resolve().parent.parent / "templates" / "base-template.docx"
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(out))
