@@ -250,6 +250,8 @@ function outlineHTML(items) {
   document.getElementById("doc-title").textContent = nm ? `${nm} · 招标文件分析报告` : "招标文件分析报告";
   const subBits = [];
   if (no) subBits.push(`编号 ${esc(no)}`);
+  const subj = ((DATA.promise || {}).rows || []).find(r => (r.item || "").indexOf("投标主体") >= 0);
+  subBits.push(`投标主体 ${subj && subj.value ? esc(subj.value) : "待确认"}`);
   const buyer = (stRow("采购人") || {}).v;
   if (buyer) subBits.push(`采购人 ${esc(buyer)}`);
   if (files.length) subBits.push(`${files.length} 份来源文件`);

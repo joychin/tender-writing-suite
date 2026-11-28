@@ -13,7 +13,7 @@ examples_en:
   - "The outline is approved — start writing the sections"
   - "Continue with the next technical section"
   - "Check the commitment figures and duplicated content"
-version: 2.4.5
+version: 2.4.7
 author: 灵燕智能
 ---
 
@@ -90,7 +90,8 @@ python3 scripts/check_writing.py --json work/review/check-result.json   # 落盘
 ```
 
 - **旧名残留必查必清**（旧机构名留在交付稿里是高频事故）：`--old-names` 把用户提过的旧机构名
-  都传进去（素材来源项目的招标方、我方曾用名等），别只靠素材文件名兜底。
+  都传进去（素材来源项目的招标方、我方曾用名等），别只靠素材文件名兜底；登记资料库里
+  其他主体的登记名与旧名候选自动带上（疑似级，不拦）。
 - **文档检查表随收尾交给用户**：单节自查与全局校验后面跟一段文档检查（单价 × 数量
   是否等于合价、合计对不对、大小写是否一致、各处总价是否一致、表格与图片版式、
   内部对账编号外泄等），不改变校验结论；那张表随收尾汇报原样贴给用户，用户说修

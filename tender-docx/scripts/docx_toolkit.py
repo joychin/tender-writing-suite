@@ -2352,6 +2352,22 @@ def cmd_copy_from(args) -> None:
     if not elem_path.is_file():
         die(f"源文件未解析或缺少元素映射：{elem_path}\n"
             f"先用 parse_document.py 解析源文件，再用 --parse 指向其解析目录")
+    # 素材新鲜度闸：指引素材列记的「文件名+行号区间」是解析时登记的位置，写作逐节进行、
+    # 素材文件是活的——解析之后被改过，还没拷的节照旧区间拷错且无声进标书（拷过的节不受影响，
+    # 同一素材不同区间可分派多节）。指纹对不上就停：重解析 + 重核指引区间，宁停勿错。
+    meta_path = parse_dir / (src_path.stem + ".meta.json")
+    if meta_path.is_file():
+        try:
+            rec = json.loads(meta_path.read_text(encoding="utf-8"))
+            rec_sha = rec.get("sha256") if isinstance(rec, dict) else None
+        except Exception:  # noqa: BLE001
+            rec_sha = None
+        if rec_sha and rec_sha != _sha256(src_path):
+            die("源文件在解析之后被改过（内容指纹与解析登记不一致）——素材列记的行号区间已不可信，本次不拷。\n"
+                "处置：先重新解析这份素材（parse_document.py <源文件> -o <解析目录>，解析是幂等的），\n"
+                "再核对写作指引素材列的行号区间是否仍指着要的内容，然后重跑 copy-from", code=2)
+    else:
+        print("  ⚠️ 解析产物没记源文件指纹（旧版产物），无法核对素材是否在解析后被改——建议重新解析后再拷")
     elements = json.loads(elem_path.read_text(encoding="utf-8"))
 
     if args.lines:

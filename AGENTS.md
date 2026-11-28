@@ -23,7 +23,8 @@
   每条缺陷先写成失败用例再修）、`review_smoke.py`（评审台服务生命周期电池 R01–R09，
   跨平台零第三方依赖，守 Windows 探活/关停语义）、`sanitize_smoke.py`（文档脱敏引擎电池
   S01–S19，零第三方依赖合成夹具；PDF 用例缺 pypdf 记失败不跳过；S11 断言 strip_metadata
-  的 `_find_soffice` 与 docx_toolkit 同口径）
+  的 `_find_soffice` 与 docx_toolkit 同口径）、`material_smoke.py`（公司资料库电池
+  M01–M12；登记目录一律指临时目录，真机登记目录不进电池）
 - `testruns/` — 测试夹具与验收电池（gitignored，含真实项目工作区样本）；`fp_smoke.py`/
   `fp_e2e_cli.py` 两电池及其夹具 `qszbh260186/work` 只存在于本机，新克隆的仓库跑不了
 - `原型/` — 评审台页面四方向视觉原型（「方向 A 纸感公文体」已采纳实施，留存备查）
@@ -49,6 +50,12 @@ python3 tests/review_smoke.py        # 评审台服务生命周期电池 R01–R
                                      #   动 serve_review 的探活/关停前先补失败用例
 python3 tests/sanitize_smoke.py      # 文档脱敏引擎电池 S01–S19（零第三方依赖合成夹具；PDF 用例缺
                                      #   pypdf 记失败不跳过）；动 strip_metadata 前先补失败用例
+python3 tests/material_smoke.py      # 公司资料库电池 M01–M12（登记目录一律指临时目录）；
+                                     #   动 material.py 前先补失败用例
+python3 tender-analysis/scripts/material.py add <文件或目录> --entity <主体>   # 公司资料库入库：
+                                     #   脱敏副本+解析+索引，按主体分目录（TENDER_MATERIAL_HOME 可改）
+python3 tender-analysis/scripts/material.py search "关键词" --entity <主体>   # 检索章节（输出素材列记法；
+                                     #   他主体命中单独点名）；list/show/forget 同族
 python3 tender-docx/scripts/make_template.py   # 改 docx_toolkit 的 setup_styles 后重生成 base-template.docx
 python3 tender-docx/scripts/docx_toolkit.py inspect --work work   # 文档检查（只读）：整本自身 + 与节文件的对账；
                                      #   也可直接给一份或几份 docx；改检查逻辑前先在本机真实工作区回放找漏报误报
@@ -175,6 +182,26 @@ python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-wri
   接力路径与自动转换的结果正文指纹一致）。
   副本输出天然避开整本指纹机制；对整本 `--in-place` 会让 `.fingerprint.json` 失配
   （references 有条目）。动它之前先看 `tests/sanitize_smoke.py`（S01–S19）。
+- **公司资料库与素材复用**（`tender-analysis/scripts/material.py`；2026-11-28 设计讨论拍板，
+  用户真机教训：skill 会检索到不属于本次投标主体的资料）：技能无状态，库在用户目录
+  `~/.lingyan/tender-materials/`（`TENDER_MATERIAL_HOME` 可改——电池与试验一律指临时
+  目录）；**按主体分目录**，检索缺省限定本次主体（承诺清单「投标主体」行，G2 收尾与
+  资格门槛同框必答，免问三条件见 analysis-lite），命中其他主体的素材单独点名确认
+  （引用性质还是误命中），主体悬空不检索。入库=strip_metadata 出脱敏副本存库（原件
+  一个字节不动；**经子进程调 tender-sanitize，不复制其函数**，`.doc` 通道/超 5MB/超时
+  杀树全走 strip 的现成出口）→ parse_document 解析**库内副本**（行号与库内文件永远
+  一致，copy-from 直接以库内文件为源并带 `--parse` 指库内解析目录）。索引由脚本确定性
+  生成（章节树/旧名候选/体检摘要），语义匹配归模型；旧名候选只做项目名称/招标编号/
+  机构名标签行与字母开头编号模式（人名同名率高不做，用户拍板）。三道闸与检查：
+  **素材新鲜度闸**（copy-from，E100–E102）——拷前比对源文件与解析登记的指纹，不一致
+  拒绝（退出码 2）并指引重解析+重核指引素材列的行号区间（素材文件是活的，旧区间拷错
+  段无声进标书），无指纹登记的旧产物放行但提醒；**登记库旧名自动载入**（check_writing
+  全局校验，E104）——其他主体的登记名与旧名候选进残留扫描当疑似级线索（不拦；显式
+  `--old-names` 仍是红线级，E103），短名是长名子串时丢短名防双重点名，主体悬空不载入
+  并明说；**素材指标符合性**（section-writing 第 4 步纪律）——素材数字承诺 vs 招标硬
+  指标核对，对不上批注点名提醒用户是否修订，不擅自改（机械扫描待回放标定，第二批）。
+  动它之前先看 `tests/material_smoke.py`（M01–M12）与 `tests/engine_smoke.py`
+  （E100–E104）。
 - **公司版式读取只读**（`docx_toolkit layout-read`；细则 tender-docx/references/company-layout.md）：
   「按这个样式」场景的读取端，本版只到读出规格表（按表出稿、登记默认、对话修订在
   后续批次）。读数一律按生效格式（直写→样式链→docDefaults→主题）；页面与页码取
@@ -351,7 +378,7 @@ python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-wri
 
 1. 改动六个技能目录，六包 `version` 同步递增 + CHANGELOG 第 1 行加版本行 + README 徽章同步
    → `python3 listing/self_check.py` 全绿
-2. 九脚本 `--help` 冒烟 OK（平级形态）；缺依赖维度已由 self_check 的 `python3 -S`
+2. 十脚本 `--help` 冒烟 OK（平级形态）；缺依赖维度已由 self_check 的 `python3 -S`
    冒烟覆盖（装机有 deps 的本机 `--help` 看不见这条）
 3. 涉及评审台/产物页面 → fp 两电池全绿；涉及引擎脚本 → `python3 tests/engine_smoke.py` /
    `python3 tests/sanitize_smoke.py` 全绿
@@ -360,7 +387,7 @@ python3 listing/build_package.py     # 发版打包：产出 out-zips/tender-wri
 5. 发版后同步两侧技能副本：`~/.workbuddy/skills/` 与 `~/.zcode/skills/` 下六个技能目录，
    逐目录 `rsync -a --delete --exclude __pycache__ --exclude .DS_Store`。`--delete` 会删掉
    目标里有、仓库没有的文件——先 `--dry-run -i` 看清删除项再真跑；同步后校验两侧 version、
-   文件清单与逐字节内容，并在安装位置复跑九脚本 `--help` 与一道防呆。本机 rsync 是
+   文件清单与逐字节内容，并在安装位置复跑十脚本 `--help` 与一道防呆。本机 rsync 是
    openrsync：`-i` 对新文件标 `>f.......`（点，不是经典 rsync 的加号），新目录看父目录的
    `cd+++++++`。两侧的其它技能目录（如 `remove-metadata`）不属于套件，不要碰。
 

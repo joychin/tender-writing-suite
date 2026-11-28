@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -844,7 +845,67 @@ def deviation_gaps(gdocs: dict, work: Path) -> list[str]:
     return warnings
 
 
-def check_global(work: Path, old_names: list[str], allow: set[str] | None = None) -> tuple[list[str], list[str]]:
+def _promise_value(work: Path, key: str) -> str:
+    """承诺清单（work/body/关键事实与承诺.md，「事项｜值｜说明」行）取值：事项含 key 的
+    第一行取值列。读不出为空——清单是唯一事实源，清单上没有就当没有。"""
+    p = work / "body" / "关键事实与承诺.md"
+    try:
+        for ln in p.read_text(encoding="utf-8").splitlines():
+            if key not in ln or "｜" not in ln:
+                continue
+            parts = [x.strip() for x in ln.split("｜")]
+            if parts and key in parts[0] and len(parts) >= 2 and parts[1]:
+                return parts[1]
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _has_library() -> bool:
+    home_s = os.environ.get("TENDER_MATERIAL_HOME", "").strip()
+    home = Path(home_s) if home_s else Path.home() / ".lingyan" / "tender-materials"
+    return (home / "索引.json").is_file()
+
+
+def _library_old_names(work: Path) -> list[str]:
+    """登记资料库的旧名清单自动载入（2026-11-28 设计讨论拍板）：其他主体的登记名与
+    素材旧名候选，供残留扫描当疑似级线索。本次主体从承诺清单「投标主体」行读——
+    没有主体行不载入（不确定谁在投就不猜，宁可漏检也不把自家名字当残留误报）；
+    自己主体的条目不进扫描；与本次项目名相同的候选剔除（素材恰好是本项目旧稿时不误报）。
+    读登记库任何出错都按没有处理，不影响主流程。"""
+    subject = _promise_value(work, "投标主体")
+    if not subject:
+        return []
+    home_s = os.environ.get("TENDER_MATERIAL_HOME", "").strip()
+    home = Path(home_s) if home_s else Path.home() / ".lingyan" / "tender-materials"
+    try:
+        idx = json.loads((home / "索引.json").read_text(encoding="utf-8"))
+        mats = idx.get("materials") if isinstance(idx, dict) else None
+        if not isinstance(mats, list):
+            return []
+    except Exception:  # noqa: BLE001
+        return []
+    proj = _promise_value(work, "项目名称")
+    names: list[str] = []
+    for m in mats:
+        if not isinstance(m, dict):
+            continue
+        if subject in (str(m.get("entity") or "").strip(), str(m.get("entity_display") or "").strip()):
+            continue
+        for k in ("entity_display", "entity"):
+            v = str(m.get(k) or "").strip()
+            if len(v) >= 2 and v not in names:
+                names.append(v)
+        for v in m.get("old_names") or []:
+            v = str(v).strip()
+            if len(v) >= 2 and v not in names and v != proj:
+                names.append(v)
+    # 短名是长名的子串时丢弃短名（「星灵」⊂「星灵创科」），避免同一处文字双重点名
+    return [n for n in names if not any(n != o and n in o for o in names)]
+
+
+def check_global(work: Path, old_names: list[str], allow: set[str] | None = None,
+                 lib_names: list[str] | None = None) -> tuple[list[str], list[str]]:
     issues: list[str] = []
     warnings: list[str] = []
     body_dir = work / "body"
@@ -990,6 +1051,23 @@ def check_global(work: Path, old_names: list[str], allow: set[str] | None = None
                 for loc, frag in labeled:
                     if name in frag:
                         issues.append(f"{p.name}:{loc} 旧名残留「{name}」：{frag.strip()[:50]}——必须清零")
+    # 登记资料库旧名（其他主体/历史项目）→ 疑似级线索，不拦流程：业绩章节里合法引用
+    # 别的项目的名字是常态，机械分不清「漏改」还是「引用」，交模型与用户判
+    if lib_names:
+        for name in lib_names:
+            if len(name) < 2 or name in old_names:
+                continue
+            hits = 0
+            for p, (_, labeled) in texts.items():
+                for loc, frag in labeled:
+                    if name in frag:
+                        warnings.append(f"{p.name}:{loc} 疑似其他主体/历史项目痕迹「{name}」"
+                                        f"（来源：登记资料库旧名清单）——核对是引用性质（业绩/背书）"
+                                        f"还是漏改：{frag.strip()[:50]}")
+                        hits += 1
+                        break
+                if hits >= 3:
+                    break
     return issues, warnings
 
 
@@ -1035,7 +1113,7 @@ def main() -> None:
     ap.add_argument("--outline", action="store_true",
                     help="目录来源标注对账（悬空/未引用来源ID）")
     ap.add_argument("--section", help="单节自查（.docx 路径）")
-    ap.add_argument("--old-names", default="", help="残留扫描旧名清单（逗号分隔）")
+    ap.add_argument("--old-names", default="", help="残留扫描旧名清单（逗号分隔）；不给则不扫残留并在结果中提示")
     ap.add_argument("--json", default="", metavar="结果.json",
                     help="把校验结果写成 JSON 文件——后面跟落盘路径（须 .json；写作进度面板读它展示，"
                          "推荐 work/review/check-result.json），不是开关；控制台输出与退出码不变")
@@ -1067,11 +1145,19 @@ def main() -> None:
         issues, warnings = check_outline(work)
     else:
         old_names = [x for x in args.old_names.split(",") if x.strip()]
-        names_file = Path("旧名名单.txt")
-        if names_file.is_file():
-            old_names += [l.strip() for l in names_file.read_text(encoding="utf-8").splitlines()
-                          if l.strip()]
-        issues, warnings = check_global(work, old_names, allow)
+        lib_names = _library_old_names(work)
+        issues, warnings = check_global(work, old_names, allow, lib_names=lib_names)
+        if not old_names and not lib_names:
+            # 名单没人负责时这是常态——不许没查装查过（警告不拦流程：没有素材复用的标书
+            # 合法地没有名单），进结果 JSON 随收尾汇报交给模型处置。登记库在而主体悬空时
+            # 点破真正缺的是「投标主体」，不是旧名清单
+            if _has_library():
+                warnings.append("残留扫描未执行——登记资料库在，但承诺清单没有「投标主体」行："
+                                "先向用户确认本次投标主体并落进承诺清单，再重跑校验；"
+                                "或用 --old-names 「旧公司名,旧项目名」显式给清单")
+            else:
+                warnings.append("残留扫描未执行——没给旧名清单：用 --old-names 「旧公司名,旧项目名」"
+                                "把素材来源项目的招标方、我方曾用名等传进来再查一遍")
 
     # 文档检查（只读、不阻断）：单节查这一节，全局查全部节文件（各节写的总价放在一起对账）。
     # 【待补】类占位已是上面的红线问题，这里不重复列；节文件的文档属性不看（交付的是整本，

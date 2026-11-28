@@ -13,7 +13,7 @@ examples_en:
   - "Assemble all sections into the final volume with TOC page numbers"
   - "Export a PDF preview of the final Word document"
   - "Check pending comments before delivery"
-version: 2.4.5
+version: 2.4.7
 author: 灵燕智能
 ---
 

@@ -144,6 +144,17 @@ E96 单元格边距跟版式（读到非缺省值才显式写）
 E97 首次登记：登记目录还不存在时 --source 提取照常成功（改前 FileNotFoundError、整条登记失败）
 E98 节文件小标题跳级（直接 h3、没经过 h2）：合册不崩、编号按缺位续（改前 KeyError）
 E99 封面提取保留空段——空段就是封面的竖向排版（改前内容全挤到页顶）
+
+第 22 批 素材新鲜度闸（2026-11-28 设计讨论拍板「停」：指引素材列记「文件名+行号区间」只是计划，
+    写作逐节进行、素材文件是活的——解析之后被改过，还没拷的节照旧区间拷错，且无声进标书；
+    拷过的节独立不受影响，同一素材不同区间可分派多节）
+E100 copy-from 源文件在解析后被改：拒绝（退出码 2）、点破「行号区间已不可信」、
+    给重新解析+重核指引区间的处置；未改源时照常拷（阴性对照在同一用例里）
+E101 重新解析（解析登记记下新指纹）后照常拷贝
+E102 解析产物没记源指纹（旧版产物）：不拦、提醒建议重新解析、照常拷贝
+E103 旧名名单.txt 隐形约定退场＋空名单明说「残留扫描未执行」（不许没查装查过）
+E104 登记资料库旧名自动载入：他主体痕迹=疑似残留不拦、自己主体不扫、显式 --old-names 仍是红线、
+    主体悬空（承诺清单没有投标主体行）不猜
 """
 import io
 import itertools
@@ -655,10 +666,14 @@ def e26():
 # ---------------------------------------------------------------- 第 4 批：真机复盘
 
 
-def cw(*a):
-    """跑 check_writing 命令行，返回 (退出码, 合并输出)。"""
+def cw(*a, cwd=None, env=None):
+    """跑 check_writing 命令行，返回 (退出码, 合并输出)。cwd 供 CWD 相对读取的行为用例
+    指定工作目录；env 供登记资料库（TENDER_MATERIAL_HOME）相关用例指向临时登记目录。"""
+    e = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    if env:
+        e.update(env)
     r = subprocess.run(CW + [str(x) for x in a], capture_output=True, text=True, errors="replace",
-                       env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+                       env=e, cwd=str(cwd) if cwd is not None else None)
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
@@ -4365,6 +4380,122 @@ def e99():
           f"exit={code} 首个文字段位次={lead_empty + 1}")
 
 
+def _parse_for_smoke(src, parse_root):
+    """真跑 parse_document 生成带源指纹的解析产物（素材新鲜度闸的登记来源）。"""
+    r = subprocess.run([sys.executable, "-B", str(ROOT / "tender-analysis" / "scripts" / "parse_document.py"),
+                        str(src), "-o", str(parse_root)],
+                       capture_output=True, text=True, errors="replace")
+    assert r.returncode == 0, (r.stdout + r.stderr)
+    return parse_root / src.name
+
+
+def e100():
+    src = WORK / "素材新鲜.docx"
+    d = Document()
+    d.add_paragraph("售后服务方案总则。")
+    d.add_paragraph("故障响应时间为 2 小时。")
+    d.add_paragraph("质保期三年。")
+    d.save(str(src))
+    pdir = _parse_for_smoke(src, WORK / "parse-素材")
+    tgt = WORK / "新鲜节.docx"
+    code, out = tk("create", tgt, "--title", "售后服务")
+    assert code == 0, out
+    code, out = tk("copy-from", src, tgt, "--parse", pdir)     # 阴性：未改源，整份照常拷
+    ok0 = code == 0 and "已拷贝" in out
+    d2 = Document(str(src))
+    d2.add_paragraph("中途插入的一段，把后面的行整体推下去。")
+    d2.save(str(src))                                          # 模拟用户在解析后改了素材，未重新解析
+    code2, out2 = tk("copy-from", src, tgt, "--lines", "L1-L2", "--parse", pdir)
+    check("E100 copy-from 源文件在解析后被改：拒绝（退出码 2）并给重解析+重核指引区间的处置",
+          ok0 and code2 == 2 and "改过" in out2 and "重新解析" in out2 and "区间" in out2,
+          f"阴性exit={code} 改后exit={code2} out={out2[:180]}")
+
+
+def e101():
+    src = WORK / "素材新鲜.docx"
+    pdir = _parse_for_smoke(src, WORK / "parse-素材")          # 重新解析：登记记下新指纹
+    tgt = WORK / "新鲜节.docx"
+    code, out = tk("copy-from", src, tgt, "--parse", pdir)
+    check("E101 重新解析后（指纹更新）照常拷贝", code == 0 and "已拷贝" in out, f"exit={code} out={out[:160]}")
+
+
+def e102():
+    pdir = WORK / "parse-素材" / "素材新鲜.docx"
+    (pdir / "素材新鲜.meta.json").unlink()                     # 旧产物形态：elements 在、meta 不在
+    tgt = WORK / "新鲜节.docx"
+    code, out = tk("copy-from", WORK / "素材新鲜.docx", tgt, "--parse", pdir)
+    check("E102 旧解析产物无源指纹：不拦、提醒建议重新解析、照常拷",
+          code == 0 and "已拷贝" in out and "重新解析" in out, f"exit={code} out={out[:200]}")
+
+
+def e103():
+    """旧名名单.txt 隐形约定退场＋空名单不装查过。
+
+    改前的两条缺陷：①残留扫描的名单除了 --old-names 参数还偷偷读 CWD 的 旧名名单.txt——
+    全仓没有任何代码生成它、SKILL 与 --help 都不提它、换个目录跑校验就静默失效（名单
+    唯一入口应回到显式的 --old-names）；②名单空着（模型没传名字，这是无人负责名单时的
+    常态）时残留扫描压根没跑，输出照样打「[校验通过] 全部合规」——没查装查过。"""
+    work, _ = make_work("w-oldname", "# 响应文件：投标文件\n## 目录\n- 目录\n- 甲节\n")
+    code, out = tk("create", work / "body" / "甲节.docx", "--title", "甲节", "--body",
+                   body("b-oldname", [{"text": "我公司服务过旧甲方建设集团及其多个关联项目。"}]))
+    assert code == 0, out
+    names = WORK / "e103-cwd"                                   # 模拟「跑校验的目录」里放着名单
+    names.mkdir(exist_ok=True)
+    (names / "旧名名单.txt").write_text("旧甲方建设集团\n", encoding="utf-8")
+    code, out = cw("--work", work, cwd=names)
+    check("E103a 旧名名单.txt 不被读：名单在场也不报残留（隐形约定退场）",
+          code == 0 and "旧名残留" not in out, f"exit={code} {out[:240]}")
+    check("E103b 空名单明说残留扫描未执行——不许没查装查过",
+          "残留扫描未执行" in out and "[校验通过]" in out, f"exit={code} {out[:240]}")
+    code, out = cw("--work", work, "--old-names", "旧甲方建设集团", cwd=names)
+    check("E103c --old-names 给了照扫：残留点名出处，且不再提示未执行",
+          code == 1 and "旧名残留" in out and "旧甲方建设集团" in out and "残留扫描未执行" not in out,
+          f"exit={code} {out[:240]}")
+
+
+def e104():
+    """登记资料库旧名自动载入（2026-11-28 设计讨论拍板「拷贝不改的废标面」）：本次主体
+    从承诺清单「投标主体」行读；其他主体的登记名与素材旧名候选=疑似残留（不拦、点破
+    「引用性质还是漏改」），自己主体不扫；显式 --old-names 仍是红线级；登记库自动载入
+    时不打「残留扫描未执行」，登记库在而主体悬空时点名去确认主体。"""
+    work, _ = make_work("w-lib", "# 响应文件：投标文件\n## 目录\n- 目录\n- 甲节\n")
+    (work / "body" / "关键事实与承诺.md").write_text(
+        "# 关键事实与承诺\n\n事项｜值｜说明\n投标主体｜奥哲｜G2 对话确认\n", encoding="utf-8")
+    code, out = tk("create", work / "body" / "甲节.docx", "--title", "甲节", "--body",
+                   body("b-lib", [{"text": "本方案沿用星灵旧项目乙的服务体系（编号 XL-2025-BD-0001），"
+                                           "并结合奥哲历史项目甲的经验。显式旧名甲的内容也应被点到。"}]))
+    assert code == 0, out
+    lib = WORK / "资料库-lib"
+    lib.mkdir(exist_ok=True)
+    (lib / "索引.json").write_text(json.dumps({"materials": [
+        {"entity": "奥哲", "entity_display": "奥哲", "file": "a.docx", "kind": "docx",
+         "old_names": ["奥哲历史项目甲"]},
+        {"entity": "星灵", "entity_display": "星灵创科", "file": "b.docx", "kind": "docx",
+         "old_names": ["星灵旧项目乙", "XL-2025-BD-0001"]},
+    ]}, ensure_ascii=False), encoding="utf-8")
+    libenv = {"TENDER_MATERIAL_HOME": str(lib)}
+    code, out = cw("--work", work, "--old-names", "显式旧名甲", env=libenv)
+    check("E104a 登记库自动载入：他主体痕迹=疑似残留（不拦）、自己主体不被点名、显式清单仍是红线",
+          code == 1 and "疑似" in out and "星灵旧项目乙" in out and "XL-2025-BD-0001" in out
+          and "痕迹「奥哲历史项目甲」" not in out and "旧名残留" in out and "显式旧名甲" in out
+          and "残留扫描未执行" not in out,
+          f"exit={code} {out[:300]}")
+    code, out = cw("--work", work, env=libenv)
+    check("E104b 只靠登记库也能扫：疑似残留照报、不打「未执行」",
+          code == 0 and "疑似" in out and "星灵旧项目乙" in out and "残留扫描未执行" not in out,
+          f"exit={code} {out[:300]}")
+    code, out = cw("--work", work, env={"TENDER_MATERIAL_HOME": str(WORK / "没有资料库")})
+    check("E104c 没有登记库：不载入、按空名单口径明说未执行",
+          code == 0 and "星灵旧项目乙" not in out and "残留扫描未执行" in out,
+          f"exit={code} {out[:300]}")
+    (work / "body" / "关键事实与承诺.md").write_text(
+        "# 关键事实与承诺\n\n事项｜值｜说明\n项目名称｜云澜市智慧园区建设工程｜招标文件\n", encoding="utf-8")
+    code, out = cw("--work", work, env=libenv)
+    check("E104d 主体悬空（承诺清单没有投标主体行）不猜：库在也不载入，明说去确认主体",
+          code == 0 and "星灵旧项目乙" not in out and "投标主体" in out,
+          f"exit={code} {out[:300]}")
+
+
 if __name__ == "__main__":
     for name, fn in (("E01", e01), ("E02", e02), ("E03", e03), ("E04", e04), ("E05", e05), ("E06", e06),
                      ("E07", e07), ("E08", e08), ("E09", e09), ("E10", e10), ("E11", e11), ("E12", e12),
@@ -4387,7 +4518,8 @@ if __name__ == "__main__":
                      ("E85", e85), ("E86", e86), ("E87", e87), ("E88", e88), ("E89", e89),
                      ("E90", e90), ("E91", e91), ("E92", e92),
                      ("E93", e93), ("E94", e94), ("E95", e95), ("E96", e96),
-                     ("E97", e97), ("E98", e98), ("E99", e99)):
+                     ("E97", e97), ("E98", e98), ("E99", e99),
+                     ("E100", e100), ("E101", e101), ("E102", e102), ("E103", e103), ("E104", e104)):
         run(name, fn)
     print(f"\n{len(PASS)} 通过 / {len(FAIL)} 失败")
     for f_ in FAIL:
