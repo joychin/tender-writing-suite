@@ -8,7 +8,7 @@
 **已在多份真实标书的完整编写中实战使用——每个版本都由真实项目复盘打磨而来。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.4.2-blue.svg)](listing/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.4.4-blue.svg)](listing/CHANGELOG.md)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-informational)
 ![Offline](https://img.shields.io/badge/%E7%BD%91%E7%BB%9C-%E7%BA%AF%E6%9C%AC%E5%9C%B0%E8%BF%90%E8%A1%8C-success)
 

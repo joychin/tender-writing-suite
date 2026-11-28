@@ -2,18 +2,18 @@
 name: tender-review
 display_name: 灵燕标书·评审台
 display_name_en: Bid Review Workbench
-description: "标书确认面：构建并运行分析报告页、评审台（目录/指引/承诺）与写作进度面板，应用页面上的修改。适用于：打开评审台、评审页面、看分析报告、在页面上改目录、确认目录、应用修改包、刷新确认面。由分析/写作环节在确认门调用，不单独承担标书写作。"
-description_zh: "标书确认面：G3 起评审台是唯一确认面——目录树、写作指引、承诺拍板全在页面里改，保存直写产物并出 diff 报告；分析阶段的报告页与写作进度面板同源构建。"
-description_en: "The bid confirmation surface: builds and serves the analysis report, the review workbench (outline/guide/commitments) and the writing progress panel; page edits are saved straight back to artifacts with a diff report."
+description: "标书评审页面：构建并运行分析报告页、评审页面（目录/指引/承诺）与写作进度面板，页面上的修改保存后更新到工作文件。适用于：打开评审页面、打开评审台、看分析报告、在页面上改目录、确认目录、保存页面修改、刷新页面。由分析/写作环节在确认节点调用，不单独承担标书写作。"
+description_zh: "标书评审页面：目录树、写作指引、承诺事项都在页面里看和改，页面上的修改保存后直接更新到工作文件，并给出改动对照；分析阶段的报告页与写作进度面板同源构建。"
+description_en: "Bid review pages: builds and serves the analysis report, the review workbench (outline/guide/commitments) and the writing progress panel; page edits save straight back to the working files with a change summary."
 examples_zh:
-  - "打开评审台，我要改目录"
-  - "刷新一下承诺拍板页面"
-  - "把我刚改的目录应用落盘"
+  - "打开评审页面，我要改目录"
+  - "刷新一下承诺页面"
+  - "把我刚改的目录保存进去"
 examples_en:
-  - "Open the review workbench so I can edit the outline"
+  - "Open the review page so I can edit the outline"
   - "Refresh the commitments review page"
-  - "Apply my outline edits to the artifacts"
-version: 2.4.2
+  - "Save my outline edits"
+version: 2.4.4
 author: 灵燕智能
 ---
 
@@ -53,21 +53,21 @@ python3 tender-review/scripts/apply_review.py --patch 改动文件.json --work w
 
 服务未起时 `build_review.py` 不回显交付链接，只提示「先起服务再重跑」——G3 的
 正确顺序是**先起服务、再重跑全量 build**，不是 build 完再起服务（初建那次没有
-`?v=` 链接，容易误用起台时的裸 URL）。
+`?v=` 链接，别拿起服务时打印的地址当交付链接）。
 
-模板即唯一视觉来源：令牌集中在 `templates/review-workbench.html` 的 `:root`，
+页面样式集中在一处：令牌集中在 `templates/review-workbench.html` 的 `:root`，
 改视觉先改模板；服务模式 GET 实时读盘读模板，刷新即生效（静态离线版是生成时点
 快照，每道门须重跑 `build_review.py`）。
 
 ## 页面规程
 
 @references/review-workbench.md：锚点 tab（overview/tree/guide/promise）、
-通道矩阵、保存直写产物与 diff 报告、应用后的必做回流（重跑
+页面保存直写工作文件与改动对照、应用后的必做回流（重跑
 `tender-writing/scripts/check_writing.py --guide` 等）。
 
 ## 停轮与链接
 
-页面交付后当轮以指针收束停轮：一行结论 + 待办去向一句话 + 「需要你补充」表格
+页面交付后当轮收尾：一行结论 + 待办去向一句话 + 「需要你补充」表格
 （`| 需补充 | 影响 | 不补充的处理 |`，处理列一律「Word 批注标注，可后补」）+
 固定告知「不补充也可以继续往下——缺失部分会以 Word 批注标在正文对应位置」+
 至多 3 条标题级提醒；URL 一律 Markdown 链接发出（裸代码串不算交付）。

@@ -2,18 +2,18 @@
 name: tender-docx
 display_name: 灵燕标书·整本交付
 display_name_en: Bid Assembly & Delivery
-description: "标书整本交付：把节 docx 自动编号合成整本 Word，实测目录页码，处理格式件前置分页与导出检查，输出收尾汇报；也管理公司版式——用户说「以后都按这个样式」时，把 Word 版历史标书读成版式规格表、确认后登记，后面的标书自动按它出，改版式用对话修订。适用于：合册、合成整本、生成最终 Word、编章节页码、目录页码、导出 PDF、交付前检查、按公司标书样式出稿、版式读取、登记公司版式。"
-description_zh: "标书交付环节：把逐节写成的正文合成整本 Word——编号与目录页由整本生成机械完成，待办批注原样迁移，导出「标题→页码」映射供回填；整本是派生产物，改内容回节文件层改再生成。收尾逐条点名待办批注、素材异议与导出提醒，交付物口径=整本 Word 文档（「合册」是内部动作，不进对话）。"
+description: "标书整本交付：把逐节写好的正文自动编号合成整本 Word，实测目录页码，处理格式件前置分页与导出检查，输出收尾汇报；也管理公司版式——用户说「以后都按这个样式」时，把 Word 版历史标书读成版式规格表、确认后登记，后面的标书自动按它出，改版式用对话修订。适用于：合成整本、合成整本 Word、生成最终 Word、编章节页码、目录页码、导出 PDF、交付前检查、按公司标书样式出稿、版式读取、登记公司版式。"
+description_zh: "标书交付环节：把逐节写成的正文合成整本 Word——章节编号与目录页码由整本自动生成，待办批注原样保留，导出「标题→页码」对照供评分索引表回填；内容要改回各节文件改，再生成一次整本。收尾逐条点名待办批注、素材异议与导出提醒，交付物口径=整本 Word 文档。"
 description_en: "Bid assembly stage: assemble section docx files into the final numbered volume with measured TOC page numbers, migrate pending comments, export a heading-to-page map, and deliver the closing report."
 examples_zh:
   - "把各节合成整本并生成目录页码"
-  - "合册后导出 PDF 预览"
+  - "合成整本 Word 后导出 PDF 预览"
   - "交付前检查一遍待办批注"
 examples_en:
   - "Assemble all sections into the final volume with TOC page numbers"
-  - "Export a PDF preview after assembly"
+  - "Export a PDF preview of the final Word document"
   - "Check pending comments before delivery"
-version: 2.4.2
+version: 2.4.4
 author: 灵燕智能
 ---
 
@@ -41,7 +41,7 @@ python3 tender-docx/scripts/docx_toolkit.py inspect --work work     # 整本检�
 招标文件对编号、目录层级有要求时才明给，方案说明见 `--help`；`--flat-outline` 把节内
 小标题摘出导航窗格（导航降噪用，
 默认关——开了 F9 刷目录会丢二级以下条目）。`--map` 导出「标题→页码」JSON 供
-评分索引表等机械回填。**页码口径=行业惯例**：封面/前置/目录不编页码，正文分节
+评分索引表等机械回填。**页码口径**（常规做法，招标文件另有要求时按招标的来）：封面/前置/目录不编页码，正文分节
 自第 1 页起编。**整本是派生产物**：编号与目录页由合册机械生成、待办批注原样
 迁移；改内容回节文件层改再合册（直接手改整本会被覆盖）；返回的警告逐条点名。
 
@@ -49,14 +49,14 @@ python3 tender-docx/scripts/docx_toolkit.py inspect --work work     # 整本检�
 整张表没了）即拒绝合册——擅自改格式件是废标级红线（入口红线 8）；用户在对话里
 明确同意改结构的节，加 `--allow-format-change "<节名>"`（多个用逗号分隔）放行。
 
-`toc-pages` 是**实测→回填→复测的收敛闭环**（默认至多 5 轮，`--max-rounds` 调）：
-回填会改目录占行、正文跟着再漂，两轮实测一致才算收敛；未收敛回滚并报警，不
-静默输出错页码。收敛后顺带核对表格里「第X章」交叉引用（只报事实，章号写错或
+`toc-pages` 是**实测→回填→复测**（默认至多 5 轮，`--max-rounds` 调）：
+回填会改目录占行、正文跟着再漂，两轮实测一致才算完成；没收敛就整体回滚、不
+写出错页码，并明确告诉用户本轮页码没测稳。收敛后顺带核对表格里「第X章」交叉引用（只报事实，章号写错或
 章节增删未同步会被点名）。
 
-**终稿字体固化（合册无条件执行）**：theme 东亚字形补显式 + 样式层归一 + run 级
-剥主题属性并固化 eastAsia——模板会被 skill 更新覆盖、拷入的历史标书 run 会带
-越权主题属性，终稿后处理让字体问题在交付面上不可见；回显 `[字体固化]` 一行。
+**终稿字体固化（合册固定执行）**：theme 东亚字形补显式 + 样式层归一 + run 级
+剥主题字体属性并固化 eastAsia——模板会被 skill 更新覆盖、拷入的历史标书 run 里
+主题字体属性会顶掉显式设置，合册收尾统一固化，字体不一致不出现在交付稿里；回显 `[字体固化]` 一行。
 
 版式：缺省用登记的公司版式（没登记用内置基准模板 `templates/base-template.docx`），
 建节与合册回显 `[版式]` 一行点名用的是哪份。用户明说用某份模板才传 `--template`，
@@ -100,7 +100,8 @@ python3 tender-docx/scripts/docx_toolkit.py inspect "标书.docx" "报价表.doc
   固定行高、图片拉伸／超宽／损坏、行距比字小、域报错、未接受的修订、文档属性里的
   工具痕迹（含 WPS 的 ICV 等自定义属性）、首页缩略图残留、看不见的批注残留。
   引擎所有落盘（建节/修订/批注/合册/压缩等）都会自动把元数据清零——用户问「交付稿
-  会不会带我们的名字」时答不会，工具痕迹来自外部文件时按检查表请用户确认要不要清。
+  会不会带我们的名字」时答：套件自己生成的部分不带，外部文件带进来的痕迹以检查表
+  为准，要不要清由用户定。
 - **整本对账**（`--work`）：节文件比整本新（整本没重新生成）、整本被手工改过（重新
   生成会覆盖）、批注数与各节之和对不上。
 - **读表**：确定的排前面，疑似（列宽折行、分辨率这类靠估算的）要人看一眼；同类版式
@@ -111,7 +112,7 @@ python3 tender-docx/scripts/docx_toolkit.py inspect "标书.docx" "报价表.doc
 
 用户给一份 Word 版历史标书、说「以后都按这个样式」时，走**读取 → 确认 → 登记**三步。
 登记之后建节、合册不用指定模板，自动按公司版式出——用户只通过对话表达意图，模板与
-参数由你消化，不甩给用户（不替用户手工写脚本搭模板）。
+参数由你处理，不让用户碰（也不替用户手工写脚本搭模板）。
 
 ```bash
 python3 tender-docx/scripts/docx_toolkit.py layout-read "历史标书.docx" --out work/版式规格.md
@@ -168,7 +169,7 @@ python3 tender-docx/scripts/docx_toolkit.py layout-forget                    # �
 **修改入口口径与停服务联动**：本地服务收尾即 `--stop` 关停，停后评审页面链接
 失效——交付/收尾消息里修改与批注销号的入口只写 Word 批注（批注在文档里，不
 依赖服务）；用户想用页面改，给离线文件路径（`work/review/评审台.html` 浏览器
-直接打开）或重起服务命令，不把本地链接当活入口引用。
+直接打开）或重起服务命令——已停服务的链接别再当可用入口发给用户。
 
 ## 收尾汇报
 
@@ -182,8 +183,8 @@ python3 tender-docx/scripts/docx_toolkit.py layout-forget                    # �
   清单不擅动库）；
 - **导出提醒（必报）**：交付 PDF 用 Word/WPS 导出（目录域自动刷新）；
   LibreOffice 导出的 PDF 宋体被换黑体，只作内部预览。
-- **不自动生成 PDF 交付稿**：AI 生成稿必然还要人工调整，PDF 由用户在终稿后
-  自行从 Word/WPS 导出；`toc-pages --pdf` 的预览 PDF 仅内部测页码用，不作
+- **不自动生成 PDF 交付稿**：终稿前通常还要人工调整，PDF 由用户定稿后
+  从 Word/WPS 导出；`toc-pages --pdf` 的预览 PDF 仅内部测页码用，不作
   交付物主动提供。
 
 ## 链尾

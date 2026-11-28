@@ -2,9 +2,9 @@
 name: tender-writing-suite
 display_name: 灵燕标书写作套件
 display_name_en: Full-Pipeline Bid Writing Suite
-description: "标书工作的重型武器——把招标文件写成可以递交的投标文件（整本 Word），已在多份真实标书的完整编写中验证；也能单独回答废标风险、资格门槛、评分办法这类问题。做法：动笔前先全扫废标条款；工期、人员、报价等数字只写用户拍板过的值，没有的留 Word 批注；历史标书能用的段落、表格、图片原样拷贝复用；也能把一份 Word 版历史标书的版式读成规格表、确认后登记成公司版式，后面的标书自动按它出（字体、字号、行距、页面、表格、目录、页码这些）。适用于：写标书、写投标文件/响应文件/技术标/商务标/投标方案，解读招标文件，查废标风险，梳理评分办法与资格门槛，规划投标目录，整理公司标书的版式、按公司样式出稿。与招投标无关的文档不适用。本技能是六技能套件的入口与总控：负责红线、确认门与环节路由。"
-description_zh: "标书工作的重型武器：把一份招标文件，变成能直接递交的投标文件整本 Word。实战出身：多份真实标书用它从头写到递交，每个版本的迭代都来自真实项目的复盘修复。写之前，废标条款全扫一遍，评分办法和资格门槛整理成表；写作中，工期、人员、报价等数字只从你拍板的清单取值，缺的留批注；历史标书可复用的段落、表格、图片按原件拷贝，不让模型重写。每章挂来源编号，覆盖情况可查。收尾机器校验：承诺数字逐条对账、章节查重、旧机构名残留清零，然后自动编号合册成书。也可以只做体检问答：废标风险、资格门槛、评分权重，逐条给出处。"
-description_en: "The heavy artillery of bid writing — turns a tender document into a submission-ready bid (a complete Word volume), proven across multiple full real bids; also answers one-shot questions about disqualification risks, eligibility thresholds, and scoring methods. How it works: disqualification clauses are scanned in full before writing; commitment figures such as duration, staffing, and pricing are taken only from the user-approved list, missing ones become Word comments; reusable paragraphs, tables, and images from past proposals are copied over as-is. Use when the user wants to write a bid, tender response, technical or commercial proposal, analyze a tender document, check disqualification risks, sort out scoring criteria and eligibility thresholds, or plan the response outline. Not for documents unrelated to bidding. This skill is the suite entry point: discipline, gates and stage routing."
+description: "标书工作的重型武器：从读招标文件、查废标风险、理清资格门槛和评分办法，到写出可以直接递交的整本 Word。工期、人员、报价等关键数字，只用你确认过的内容；还没定的地方不替你编，留成 Word 批注。历史标书里能用的段落、表格和图片，按原件带入。除了写标书，也可以单独分析招标文件、规划投标目录、回答废标风险等问题；交付前还能清除 Word 或 PDF 里的作者、公司名、模板路径等敏感信息和工具痕迹，读取并登记历史标书的版式，后续按公司样式出稿。适用于写标书、投标文件、响应文件、技术标、商务标和投标方案，不适用于与招投标无关的文档。"
+description_zh: "标书工作的重型武器：从读招标文件、查废标风险、理清资格门槛和评分办法，到写出可以直接递交的整本 Word。写之前，废标条款全扫一遍，评分办法和资格门槛整理成表；写作中，工期、人员、报价等数字只从你确认过的清单取值，缺的留成 Word 批注，不代编；历史标书可复用的段落、表格、图片按原件带入，每章挂来源编号，覆盖情况可查。收尾逐条对账承诺数字、章节查重、清理机构名残留，然后自动编号合成整本 Word。也可以只问一件事：废标风险、资格门槛、评分权重，逐条给出处。交付前还能清除 Word 或 PDF 里的作者、公司名、模板路径等敏感信息和工具痕迹；历史标书的版式读成规格表，确认后登记，后续按公司样式出稿。"
+description_en: "The heavy artillery of bid writing — from reading the tender document, checking disqualification risks, and mapping eligibility thresholds and scoring criteria, to a submission-ready bid in one complete Word volume. Key figures such as duration, staffing and pricing come only from what you have confirmed; anything still undecided is left as a Word comment, never invented. Reusable paragraphs, tables and images from past proposals are carried over as originals. Beyond writing the bid, it can analyze a tender document on its own, plan the response outline and answer disqualification-risk questions; before delivery it also strips sensitive metadata (author, company, template paths and tool traces) from Word and PDF files, and can register a past proposal's layout as the company style for later bids. Use for writing bids, tender responses, technical or commercial proposals; not for documents unrelated to bidding."
 examples_zh:
   - "按这份招标文件把标书写出来"
   - "这个招标文件分析一下，然后告诉我响应文件如何组成"
@@ -13,7 +13,7 @@ examples_en:
   - "Write the bid based on this tender document"
   - "Analyze this tender document and tell me how to structure our response"
   - "Check my bid document for anything missing"
-version: 2.4.2
+version: 2.4.4
 author: 灵燕智能
 ---
 
@@ -70,7 +70,7 @@ tender-review（评审台）、tender-docx（合册交付）、tender-sanitize�
 | 第二步 要点提取 | tender-analysis | 登记表 + 废标全扫 + 澄清清单（指针带解析概况） | G2 |
 | 第三步 目录树 | tender-analysis | 响应文件分解 + 目录初稿 + 三道清理 | G3 |
 | 第四步 写作准备 | tender-writing | 指引与承诺一次成形（两 tab 只读，给值走对话） | G4 / G5（一次停轮） |
-| 第五步 逐节生成 | tender-writing | **首开进度面板后**按模式路由写节（未 `--open-progress` 首开即写被工具硬拦） | — |
+| 第五步 逐节生成 | tender-writing | **首开进度面板后**按模式路由写节（未 `--open-progress` 首开即写，工具层面拒写拒查） | — |
 | 第六步 全局校验 | tender-writing | 承诺对账 + 查重 + 残留扫描 + 招标格式件表格比对；跑完**直接进第七步合册**（不问「合册还是先补齐」；红线 8 的格式件比对不过须先修复） | G6 |
 | 第七步 合册整本 | tender-docx | 自动编号 + 目录实测页码 + 整本检查（只读，结果随收尾交给用户） | — |
 | 单独检查一份 Word | tender-docx | 只要检查不要写作：给一份或几份 Word，出文字结论 + 一张表（不改被检查的文件，用户说修才动） | — |

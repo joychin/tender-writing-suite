@@ -3,7 +3,7 @@ name: tender-analysis
 display_name: 灵燕标书·解析分析
 display_name_en: Bid Analysis (Parse & Outline)
 description: "分析招标文件：解析全文、提取要点与登记表、全扫废标条款、梳理评分办法与资格门槛、登记澄清清单、规划响应文件与投标目录。适用于：分析标书、解读招标文件、查废标风险、梳理评分办法、资格门槛、投标目录、要点提取、投标要准备哪些材料。用户要写整本标书时由入口技能路由到本技能做前置分析。"
-description_zh: "标书分析环节：把招标文件读成可执行的作战地图——废标条款全扫、评分办法与资格门槛成表、澄清清单逐条带出处、响应文件与目录树成形。只分析不写正文，分析结论可被写作环节直接承接。"
+description_zh: "标书分析环节：只分析不写正文——废标条款全扫、评分办法与资格门槛成表、澄清清单逐条带出处、响应文件与投标目录成形，分析结论可被写作环节直接承接。"
 description_en: "Tender analysis stage: parse the full tender document, extract key points into registry tables, scan all disqualification clauses, map scoring criteria and eligibility thresholds, register clarifications with provenance, and plan response volumes and the bid outline. Analysis only — no body writing."
 examples_zh:
   - "帮我分析这份招标文件，废标风险有哪些"
@@ -13,7 +13,7 @@ examples_en:
   - "Analyze this tender document and list the disqualification risks"
   - "Turn the scoring criteria and eligibility thresholds into tables"
   - "Plan the bid response outline for this project"
-version: 2.4.2
+version: 2.4.4
 author: 灵燕智能
 ---
 
@@ -35,7 +35,7 @@ author: 灵燕智能
 
 用户只要答案、不要标书（废标风险/资格门槛/评分办法/要备哪些材料）时走本步：
 解析（同第一步，含来源确认）→ 读 @tender-writing-suite/references/evidence-rules.md
-→ 按 @references/analysis-lite.md 出本题要用的登记表 → 同一命令产出只读分析报告
+→ 按 @references/analysis-lite.md 出本次要用的登记表 → 同一命令产出只读分析报告
 （分析阶段唯一交付面，见 @tender-review/references/review-workbench.md）→ 逐条带
 出处直接回答，末尾点明已检查范围，提示「要生成完整投标文件，回复开始写标书」。
 不做目录、不写正文、不合册；已出登记表全流程沿用，缺的第二步补齐。涉公司家底
@@ -79,8 +79,8 @@ author: 灵燕智能
 读 @tender-writing-suite/references/evidence-rules.md（执行前必读），按
 @references/analysis-lite.md 产出四张登记表 + 废标全扫 + 澄清清单；收尾跑
 `python3 tender-writing/scripts/check_writing.py --analysis` 校验
-（coverage 与出处引用；`--work` 默认 `work`）。定位纪律：行号区间或关键词检索，**行号区间精读取证，
-禁止整读解析 md**。过 G2 门：刷新分析报告（正常路径的首次报告交付——第一节
+（coverage 与出处引用；`--work` 默认 `work`）。定位纪律：行号区间或关键词检索，**按区间定点读取，
+不整读解析 md**。过 G2 门：刷新分析报告（正常路径的首次报告交付——第一节
 概况表即解析结论；交付链接用 build_review 回显的 [交付链接]＝分析报告页直链，
 评审台是 G3 起的确认面，勿拿评审台链接标成报告交付）；对话指针开头带解析概况一句（主文件/规模/识别方式），关键
 要点（废标最严几条、评分框架、
@@ -110,7 +110,7 @@ author: 灵燕智能
    @tender-review/references/review-workbench.md）。
 
 **树格式红线**：每行 `- ` 开头、无编号前缀、每级缩进 2 空格、独立附件号条目
-平级、不用代码块包裹——违反的行不会被合册解析。
+平级、不用代码块包裹——违反的行合册时不会被解析。
 
 ## 链尾 HARD-GATE
 
