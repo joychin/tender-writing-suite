@@ -13,7 +13,7 @@ examples_en:
   - "The outline is approved — start writing the sections"
   - "Continue with the next technical section"
   - "Check the commitment figures and duplicated content"
-version: 2.4.4
+version: 2.4.5
 author: 灵燕智能
 ---
 

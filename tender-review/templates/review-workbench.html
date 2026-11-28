@@ -93,6 +93,18 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
 .chip.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-soft)}
 .chip.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-soft)}
 .chip.brand{color:var(--brand);border-color:var(--brand);background:var(--brand-soft)}
+/* 徽章悬浮摘要（编号→人话的第一眼解释，点击前的预览） */
+#tip{position:fixed;z-index:80;max-width:380px;background:var(--card);border:1px solid var(--line-strong);border-radius:var(--r-md);box-shadow:var(--shadow-md);padding:10px 12px;font-size:12px;line-height:1.65}
+#tip .t-head{font-weight:600;margin-bottom:4px}
+#tip .t-code{color:var(--ink-3);font-family:var(--mono);font-weight:400;font-size:11px}
+#tip .t-quote{border-left:2px solid var(--line-strong);background:var(--line-soft);padding:6px 9px;margin:5px 0;border-radius:var(--r-sm)}
+#tip .t-src{color:var(--ink-3)}
+/* 首访引导条（localStorage 记已读） */
+.onboard{display:flex;align-items:flex-start;gap:10px;border:1px solid var(--line-strong);background:var(--line-soft);border-radius:var(--r-md);padding:10px 14px;font-size:13px;max-width:1152px;margin:14px auto 0}
+.onboard b{font-weight:600}
+.onboard .x{color:var(--ink-3);font-size:14px;line-height:1.4;padding:0 2px}
+/* 目录树工具行常驻说明 */
+.tool-hint{font-size:12px;color:var(--ink-2);border-left:2px solid var(--brand);padding:2px 0 2px 10px;flex:1 1 320px;min-width:0}
 /* ===== 目录树 ===== */
 .tree-tools{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
 .tree-tools input[type=search]{flex:0 1 220px;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r-md)}
@@ -102,7 +114,9 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
 .vol-head .vn{font-family:var(--serif);font-weight:600;font-size:16px;letter-spacing:.02em}
 .vol-head .vc{font-size:12px;color:var(--ink-2)}
 .vol-head .info-btn{width:20px;height:20px;border-radius:50%;border:1px solid var(--line);color:var(--ink-2);font-size:11px;line-height:1;text-align:center}
-.legend{padding:8px 14px;background:var(--line-soft);font-size:12px;color:var(--ink-2);display:flex;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.legend{padding:8px 14px;background:var(--line-soft);font-size:12px;color:var(--ink-2);display:flex;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line);align-items:center}
+.legend .lead{font-weight:600}
+.legend .lg-act{color:var(--brand)}
 .scope{padding:8px 14px;font-size:12px;color:var(--ink-2)}
 .rows{padding:6px 8px 10px}
 .row{position:relative;border-radius:var(--r-md)}
@@ -121,9 +135,10 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
 .row .ovl{font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px;margin-left:8px}
 .rowbtns{display:none;margin-left:auto;gap:2px}
 .row .line:hover .rowbtns{display:flex}
-.rowbtns button{width:24px;height:24px;border-radius:var(--r-sm);color:var(--ink-2);font-size:12px;line-height:1}
-.rowbtns button:hover{background:var(--line);color:var(--ink)}
-.rowbtns button.rb-del.arm{background:var(--danger);color:var(--on-brand)}
+.rowbtns button{padding:2px 7px;height:22px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--card);color:var(--ink-2);font-size:12px;line-height:1.4;white-space:nowrap}
+.rowbtns button:hover{background:var(--line-soft);color:var(--ink)}
+.rowbtns button.rb-del svg{display:inline-block;vertical-align:-2px;margin-right:3px}
+.rowbtns button.rb-del.arm{background:var(--danger);border-color:var(--danger);color:var(--on-brand)}
 .kids{margin-left:18px;border-left:1px dashed var(--line);padding-left:6px}
 .ctxmenu{position:fixed;z-index:100;background:var(--card);border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-md);min-width:160px;padding:4px}
 .ctxmenu button{display:block;width:100%;text-align:left;padding:6px 12px;border-radius:var(--r-sm);font-size:13px}
@@ -226,6 +241,9 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
   .promise .col{min-width:0}
   .panel{padding:16px}
   .row .ovl{display:none}
+  .onboard{margin:14px 16px 0}
+  .tool-hint{flex-basis:100%}
+  #tip{max-width:min(380px,86vw)}
 }
 ::selection{background:var(--selection)}
 @media (max-width:768px){
@@ -254,11 +272,22 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
   <button data-tab="promise">承诺清单<span class="cnt" id="cnt-promise"></span></button>
 </nav>
 
+<!-- 首访引导条：讲清「哪里能改」，localStorage 记已读，只出现一次 -->
+<div class="onboard" id="onboard" hidden>
+  <div style="flex:1"><b>这个页面你可以直接改：</b>目录树能增删、排序、改名（点任何彩色标签可看招标原文）；写法怎么调，在对话里说就行。</div>
+  <button class="btn sm" id="onboard-ok">知道了</button>
+  <button class="x" id="onboard-x" title="不再显示">✕</button>
+</div>
+
 <!-- 总览 -->
 <section class="panel active" id="panel-overview">
   <div id="ov-banner"></div>
   <div class="card"><h3>需要你确认的事 <span class="sub">逐条都在本页处理；不补充也能继续——缺失处会以 Word 批注标注在正文</span></h3><div id="todos"></div></div>
   <div class="card" id="score-check" hidden><h3>目录体检 <span class="sub">未安排响应章节的评分项——漏排直接丢分；补章节进目录，或在来源标注里补该评分项编号</span></h3><div id="score-check-body"></div></div>
+  <div class="card"><h3>响应文件目录 <span class="sub"><span class="num" id="ov-tree-cnt">—</span> 章 · 页面上可直接调整</span></h3>
+    <p class="small muted" style="margin:0 0 10px">这就是将来整本 Word 文档的章节结构——顺序、层级、增删、改名都在目录树里改，保存后写作按新目录进行。</p>
+    <button class="btn primary" id="ov-tree-go">去查看和调整 →</button>
+  </div>
   <div class="card"><h3>招标文件分析报告 <span class="sub">只读快照，可转发可打印——分析内容全量在报告页</span></h3>
     <p class="small muted" id="report-stats" style="margin:0 0 10px">—</p>
     <a class="btn primary" id="report-link" href="招标文件分析报告.html">打开报告页面 →</a>
@@ -276,7 +305,8 @@ code{font-family:var(--mono);font-size:12px;background:var(--line-soft);padding:
     <button class="btn primary" id="tree-edit-btn">编辑目录</button>
     <button class="btn" id="tree-done-btn" hidden>完成编辑</button>
     <span class="savestate" id="tree-savestate" hidden><span class="dot"></span><span></span></span>
-    <span id="tree-hint" class="small muted" hidden>拖拽移动（上/下插入、中间并入） · 右键更多操作</span>
+    <span id="tree-hint" class="small muted" hidden>拖拽移动（上/下插入、中间并入） · 双击名称改名 · 右键更多操作</span>
+    <span class="tool-hint">目录＝将来整本 Word 文档的章节骨架：增删、排序、改名都在这里改，保存后写作按新目录进行</span>
     <span class="spacer" style="flex:1"></span>
     <span class="matchcnt" id="tree-match" hidden></span>
     <input type="search" id="tree-search" placeholder="搜索目录…">
@@ -416,6 +446,7 @@ function tabCount() {
   $("#cnt-tree").textContent = leaves;
   $("#cnt-guide").textContent = rows;
   $("#cnt-promise").textContent = DATA.promise.rows.length;
+  const ovCnt = $("#ov-tree-cnt"); if (ovCnt) ovCnt.textContent = leaves;
 }
 function renderTabs() {
   // 写作指引/承诺清单按阶段显隐：数据未生成时不出现（空态横幅取消，避免空 tab 误导）
@@ -434,6 +465,17 @@ function switchTab(name) {
   history.replaceState(null, "", "#tab=" + name);
 }
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+/* 首访引导条：只在第一次出现，「知道了」/✕ 都算已读 */
+$("#ov-tree-go").onclick = () => switchTab("tree");
+(function () {
+  let done = false;
+  try { done = !!localStorage.getItem("review-onboard-done"); } catch (e) { done = false; }
+  const bar = $("#onboard");
+  const dismiss = () => { bar.hidden = true; try { localStorage.setItem("review-onboard-done", "1"); } catch (e) {} };
+  if (!done) bar.hidden = false;
+  $("#onboard-ok").onclick = dismiss;
+  $("#onboard-x").onclick = dismiss;
+})();
 
 /* ================= 编号预览 ================= */
 const CN = "一二三四五六七八九十";
@@ -606,6 +648,10 @@ function nodeBadges(n) {
   const ids = [...new Set([...(n.src || []), ...((n.desc && n.desc.理由来源 ? n.desc.理由来源 : "").split(/[,，、]/).filter(Boolean))])];
   return ids.filter(id => /^(MAND|TPL|REQ|SCORE)-\d+$/i.test(id));
 }
+/* 编号的用户口径：徽章/图例/弹窗标题一律人话短标签，原始编号退到 title 与溯源弹窗（对账、与登记表核对用） */
+const ID_ZH = { MAND: "强制 ", TPL: "格式件 ", REQ: "要求 ", SCORE: "评分 " };
+const TYPE_ZH = { MAND: "资格/强制条款", TPL: "格式件（招标方给定）", REQ: "商务技术要求", SCORE: "评分项" };
+function zhId(id) { return String(id).replace(/^(MAND|TPL|REQ|SCORE)-(\d+)$/i, (_, p1, p2) => ID_ZH[p1.toUpperCase()] + p2); }
 function renderVolumes() {
   const host = $("#volumes"); host.innerHTML = "";
   const q = S.treeSearch.trim().toLowerCase();
@@ -616,11 +662,11 @@ function renderVolumes() {
     const numMap = numberingMap(v.name);
     const head = document.createElement("div"); head.className = "vol-head";
     head.innerHTML = `<span class="vn">${esc(v.name)}</span><span class="vc num">${S.vol[v.name].nodes.length} 个顶层章节</span>`;
-    const ib = document.createElement("button"); ib.className = "info-btn"; ib.textContent = "i"; ib.title = "来源标注图例";
+    const ib = document.createElement("button"); ib.className = "info-btn"; ib.textContent = "i"; ib.title = "收起/展开图例";
     ib.onclick = () => legendEl.hidden = !legendEl.hidden;
     head.appendChild(ib); volEl.appendChild(head);
-    const legendEl = document.createElement("div"); legendEl.className = "legend"; legendEl.hidden = true;
-    legendEl.innerHTML = `来源标注（点徽章看原文与出处）：<span class="badge MAND">MAND 资格/强制条款</span><span class="badge TPL">TPL 格式件（招标方给定）</span><span class="badge REQ">REQ 商务技术要求</span><span class="badge SCORE">SCORE 评分项</span>`;
+    const legendEl = document.createElement("div"); legendEl.className = "legend";
+    legendEl.innerHTML = `<span class="lead">彩色标签＝这一章和招标文件的关系：</span><span class="badge MAND">红＝缺了就废标的强制要求</span><span class="badge TPL">蓝＝招标方给定的格式模板</span><span class="badge REQ">绿＝商务技术要求</span><span class="badge SCORE">黄＝评审打分项</span><span class="lg-act">点任何标签看招标原文</span>`;
     volEl.appendChild(legendEl);
     if (v.scope) { const sc = document.createElement("div"); sc.className = "scope"; sc.textContent = "编制说明：" + v.scope; volEl.appendChild(sc); }
     const rows = document.createElement("div"); rows.className = "rows";
@@ -673,9 +719,11 @@ function renderRow(n, volName, numMap, depth, idx, parentUid) {
   for (const id of nodeBadges(n)) {
     const b = document.createElement("span");
     const t = id.split("-")[0].toUpperCase();
-    b.className = "badge " + t; b.textContent = id;
-    b.title = id + " " + ({ MAND: "资格/强制条款", TPL: "格式件（招标方给定）", REQ: "商务技术要求", SCORE: "评分项" }[t] || "") + " · 点击看原文与出处";
-    b.onclick = () => openTrace(id);
+    b.className = "badge " + t; b.textContent = zhId(id);
+    b.title = `${zhId(id)}（${id}） ${TYPE_ZH[t] || ""} · 点击看原文与出处`;
+    b.onclick = () => { hideTip(); openTrace(id); };
+    b.addEventListener("mouseenter", () => showTip(b, id));
+    b.addEventListener("mouseleave", hideTip);
     line.appendChild(b);
   }
   if (n.desc && n.desc["交付形态"]) { const c = document.createElement("span"); c.className = "chip"; c.textContent = n.desc["交付形态"]; line.appendChild(c); }
@@ -683,18 +731,18 @@ function renderRow(n, volName, numMap, depth, idx, parentUid) {
     const ovl = document.createElement("span"); ovl.className = "ovl"; ovl.textContent = (n.desc && n.desc.概述) || ""; line.appendChild(ovl);
     const btns = document.createElement("span"); btns.className = "rowbtns";
     const mk = (txt, title, fn, cls) => { const b = document.createElement("button"); b.textContent = txt; b.title = title; if (cls) b.className = cls; b.onclick = e => { e.stopPropagation(); fn(); }; return b; };
-    btns.appendChild(mk("↑", "上移", () => actUpDown(n.uid, -1)));
-    btns.appendChild(mk("↓", "下移", () => actUpDown(n.uid, 1)));
-    btns.appendChild(mk("✎", "改名（也可双击名称）", () => inlineRename(nm, n.text, t => actRename(n.uid, t))));
-    btns.appendChild(mk("＋", "新增同级", () => actAdd(parentUid, idx + 1, volName)));
-    const add = mk("↳", depth + 1 > MAX_LEVEL ? "层级封顶 5 级" : "新增子级", () => actAdd(n.uid, 0));
+    btns.appendChild(mk("上移", "上移", () => actUpDown(n.uid, -1)));
+    btns.appendChild(mk("下移", "下移", () => actUpDown(n.uid, 1)));
+    btns.appendChild(mk("改名", "改名（也可双击名称）", () => inlineRename(nm, n.text, t => actRename(n.uid, t))));
+    btns.appendChild(mk("加同级", "新增同级", () => actAdd(parentUid, idx + 1, volName)));
+    const add = mk("加子级", depth + 1 > MAX_LEVEL ? "层级封顶 5 级" : "新增子级", () => actAdd(n.uid, 0));
     if (depth + 1 > MAX_LEVEL) add.disabled = true;
     btns.appendChild(add);
     const del = mk("", "删除（含子节点）", () => {
       if (del.classList.contains("arm")) actRemove(n.uid);
       else { del.classList.add("arm"); del.title = "再点一次确认删除（含子节点）"; setTimeout(() => { del.classList.remove("arm"); del.title = "删除（含子节点）"; }, 2500); }
     });
-    del.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.5 4.2h11" stroke-linecap="round"/><path d="M5.8 4.2V3c0-.4.3-.8.8-.8h2.8c.5 0 .8.4.8.8v1.2"/><path d="M4.2 4.2l.6 8.9c0 .5.4.9.9.9h4.6c.5 0 .9-.4.9-.9l.6-8.9" stroke-linejoin="round"/><path d="M6.6 6.6v4.2M9.4 6.6v4.2" stroke-linecap="round"/></svg>';
+    del.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.5 4.2h11" stroke-linecap="round"/><path d="M5.8 4.2V3c0-.4.3-.8.8-.8h2.8c.5 0 .8.4.8.8v1.2"/><path d="M4.2 4.2l.6 8.9c0 .5.4.9.9.9h4.6c.5 0 .9-.4.9-.9l.6-8.9" stroke-linejoin="round"/><path d="M6.6 6.6v4.2M9.4 6.6v4.2" stroke-linecap="round"/></svg>删除';
     btns.appendChild(del);
     ["封面", "目录"].includes(n.text) && (del.title = "删除（含子节点）——整本生成按名识别「" + n.text + "」", btns.title = "「封面」「目录」由整本生成按名识别，改名/删除会影响封面页与目录页生成");
     line.appendChild(btns);
@@ -771,16 +819,35 @@ function renderTreeMode() {
 }
 $("#tree-search").oninput = e => { S.treeSearch = e.target.value; renderVolumes(); refreshNumbering(); };
 
+/* ================= 徽章悬浮摘要 ================= */
+const tipEl = document.createElement("div"); tipEl.id = "tip"; tipEl.hidden = true; document.body.appendChild(tipEl);
+function showTip(badge, id) {
+  const r = (DATA.registry || {})[id];
+  if (!r) return;  // 没有登记原文的编号不给空壳预览，点开溯源看悬空提示
+  const t = id.split("-")[0].toUpperCase();
+  tipEl.innerHTML = `<div class="t-head">${esc(zhId(id))}<span class="t-code">（${esc(id)} · ${TYPE_ZH[t] || ""}${r.score ? " · " + esc(r.score) : ""}）</span></div>`
+    + `<div class="t-quote">${esc((r.text || "").slice(0, 60))}${(r.text || "").length > 60 ? "…" : ""}</div>`
+    + `<div class="t-src">${esc(r.source || "")}</div>`;
+  tipEl.hidden = false;
+  const rect = badge.getBoundingClientRect();
+  tipEl.style.left = Math.max(8, Math.min(rect.left, innerWidth - tipEl.offsetWidth - 12)) + "px";
+  let top = rect.bottom + 6;
+  if (top + tipEl.offsetHeight > innerHeight - 8) top = rect.top - tipEl.offsetHeight - 6;
+  tipEl.style.top = Math.max(8, top) + "px";
+}
+function hideTip() { tipEl.hidden = true; }
+window.addEventListener("scroll", hideTip, true);
+
 /* ================= 溯源弹窗 ================= */
 function openTrace(id) {
   const r = (DATA.registry || {})[id];
   const mask = document.createElement("div"); mask.className = "mask";
   const m = document.createElement("div"); m.className = "modal";
-  m.innerHTML = `<button class="close" title="关闭">✕</button><h4>来源追溯 · ${esc(id)}</h4>`;
+  m.innerHTML = `<button class="close" title="关闭">✕</button><h4>来源追溯 · ${esc(zhId(id))}</h4>`;
   if (!r) { const p = document.createElement("p"); p.className = "muted small"; p.textContent = `这条编号没有登记原文（引用悬空）——可能是目录引用了不存在的来源编号。`; m.appendChild(p); }
   else {
     const meta = document.createElement("div"); meta.className = "small muted";
-    meta.innerHTML = `<span class="badge ${esc(id.split("-")[0])}">${esc(id)}</span> ${esc(r.source || "出处未登记")}`;
+    meta.innerHTML = `<span class="badge ${esc(id.split("-")[0])}">${esc(zhId(id))}</span> <span class="mono">${esc(id)}</span> ${esc(r.source || "出处未登记")}`;
     m.appendChild(meta);
     const q = document.createElement("div"); q.className = "srctext"; q.textContent = r.text || "（未存登记原文，出处见上方）"; m.appendChild(q);
     const ctxHost = document.createElement("div"); m.appendChild(ctxHost);
@@ -982,7 +1049,7 @@ function renderGuideDetail() {
       const r = (DATA.registry || {})[id];
       const d = document.createElement("div"); d.className = "basisrow";
       const scoreTxt = id.startsWith("SCORE") && r && r.score ? `<span class="chip warn">${esc(r.score)}</span>` : "";
-      d.innerHTML = `<span class="badge ${esc(id.split("-")[0])} bid" style="cursor:pointer">${esc(id)}</span>${scoreTxt}<div class="quote">${esc(r && r.text || "未找到此编号的登记原文")}</div><div class="src">${esc(r && r.source || "")}</div>`;
+      d.innerHTML = `<span class="badge ${esc(id.split("-")[0])} bid" style="cursor:pointer" title="${esc(zhId(id))}（${esc(id)}） · 点击看原文与出处">${esc(zhId(id))}</span>${scoreTxt}<div class="quote">${esc(r && r.text || "未找到此编号的登记原文")}</div><div class="src">${esc(r && r.source || "")}</div>`;
       d.querySelector(".badge").onclick = () => openTrace(id);
       basis.appendChild(d);
     }
@@ -1144,9 +1211,8 @@ function renderTodos() {
     const body = document.getElementById("score-check-body"); body.innerHTML = "";
     for (const s of uncov) {
       const r = (DATA.registry || {})[s.id] || {};
-      const num = s.id.slice(6).replace(/^0+(?=\d)/, "");
       const line = document.createElement("div"); line.className = "kvrow small";
-      line.innerHTML = `<span class="badge SCORE" style="cursor:pointer" title="${esc(s.id)} · 点击看招标原文">评分项 ${num}</span><b class="num" style="min-width:44px">${esc(String(s.score))}${/^\d+$/.test(String(s.score)) ? "分" : ""}</b>${esc(s.item)} <span class="mono muted">${esc(r.source || "")}</span>`;
+      line.innerHTML = `<span class="badge SCORE" style="cursor:pointer" title="${esc(zhId(s.id))}（${esc(s.id)}） · 点击看招标原文">${esc(zhId(s.id))}</span><b class="num" style="min-width:44px">${esc(String(s.score))}${/^\d+$/.test(String(s.score)) ? "分" : ""}</b>${esc(s.item)} <span class="mono muted">${esc(r.source || "")}</span>`;
       line.querySelector(".badge").onclick = () => openTrace(s.id);
       body.appendChild(line);
     }

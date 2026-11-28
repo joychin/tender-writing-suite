@@ -13,7 +13,7 @@ examples_en:
   - "Write the bid based on this tender document"
   - "Analyze this tender document and tell me how to structure our response"
   - "Check my bid document for anything missing"
-version: 2.4.4
+version: 2.4.5
 author: 灵燕智能
 ---
 

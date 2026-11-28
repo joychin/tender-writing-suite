@@ -83,6 +83,7 @@ table.t.fx{table-layout:fixed;min-width:640px}
 .tag.req{color:var(--accent);border-color:var(--accent)}
 .tag.score{color:var(--warn);border-color:var(--warn)}
 .tag.danger{color:var(--danger);border-color:var(--danger)}
+.report-note{font-size:12px;color:var(--muted);margin:0 0 8px}
 /* 项目概况 kv */
 .kv{display:grid;grid-template-columns:minmax(96px,auto) 1fr;gap:0;margin-top:4px;border-top:1px solid var(--border)}
 .kv>div{padding:9px 12px;border-bottom:1px solid var(--border);font-size:13px}
@@ -196,6 +197,9 @@ table.t.fx{table-layout:fixed;min-width:640px}
 <script>
 const DATA = JSON.parse(document.getElementById("report-data").textContent);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+/* 编号的用户口径：与评审页面目录树同源——徽章/表格首列显示人话短标签，原始编号进 title（悬停可见，供与登记表对账） */
+const ID_ZH = { MAND: "强制 ", TPL: "格式件 ", REQ: "要求 ", SCORE: "评分 " };
+const zhId = id => String(id).replace(/^(MAND|TPL|REQ|SCORE)-(\d+)$/i, (_, p1, p2) => ID_ZH[p1.toUpperCase()] + p2);
 const has = v => v !== "" && v !== "—" && v != null;
 const PENDING = "本部分未生成——要点提取完成后由助手更新本报告（单轮问答按问题只出相关表）。";
 const BIDPART_ZH = { qualification: "资格", commercial: "商务", technical: "技术", pricing: "报价", unknown: "未定" };
@@ -286,7 +290,7 @@ function outlineHTML(items) {
       // 正文格与表头逐列对齐：已知角色列走专属渲染，未识别列原样出文本——
       // 现场多写一列时不能只显示表头而正文空缺。
       return h.map((_, j) => {
-        if (j === 0) return `<span class="tag ${tagCls}">${esc(id)}</span>`;
+        if (j === 0) return `<span class="tag ${tagCls}" title="${esc(id)}">${esc(zhId(id))}</span>`;
         if (j === nameI) return `<b>${esc(at(nameI))}</b>`;
         if (j === partI) return at(partI) ? `<span class="tag">${esc(BIDPART_ZH[at(partI)] || at(partI))}</span>` : "";
         if (j === extraI) return esc(at(extraI));
@@ -295,7 +299,9 @@ function outlineHTML(items) {
       });
     }, widths);
   };
-  html += `<p class="sec-note" style="margin-top:18px">必须提供的章节（${fmt.mand && fmt.mand.rows ? fmt.mand.rows.length : 0} 项）</p>` + regTable(fmt.mand, "req", "MAND");
+  html += `<p class="sec-note" style="margin-top:18px">必须提供的章节（${fmt.mand && fmt.mand.rows ? fmt.mand.rows.length : 0} 项）</p>`;
+  html += `<p class="report-note">编号是本套流程的内部索引：评审页面目录树里的同色标签与之对应。</p>`;
+  html += regTable(fmt.mand, "req", "MAND");
   html += `<p class="sec-note" style="margin-top:18px">招标方给出的格式模板（${fmt.tpl && fmt.tpl.rows ? fmt.tpl.rows.length : 0} 项）</p>` + regTable(fmt.tpl, "req", "TPL");
   html += coverageHTML(fmt.coverage);
   box.innerHTML = html;
@@ -308,7 +314,7 @@ function outlineHTML(items) {
   const biz = DATA.biz;
   if (!biz || !(biz.rows || []).length) { box.innerHTML = `<p class="sec-note">${PENDING}</p>`; return; }
   box.innerHTML = tableHTML(["编号", "要求（招标原文）", "出处"], biz.rows, r => [
-    `<span class="tag req">${esc(r.id)}</span>`,
+    `<span class="tag req" title="${esc(r.id)}">${esc(zhId(r.id))}</span>`,
     `<b>${esc(r.text)}</b>`,
     `<span class="src">${esc(r.src)}</span>`,
   ], ["88px", "auto", "24%"]) + coverageHTML(biz.coverage);
@@ -323,7 +329,7 @@ function outlineHTML(items) {
   box.innerHTML = tableHTML(["编号", "评分项", "分值", "评分要点", "出处"], sc, s => {
     const r = (DATA.registry || {})[s.id] || {};
     return [
-      `<span class="tag score">${esc(s.id)}</span>`,
+      `<span class="tag score" title="${esc(s.id)}">${esc(zhId(s.id))}</span>`,
       `<b>${esc(s.item)}</b>`,
       `<span class="num">${esc(String(s.score))}${/^\d+$/.test(String(s.score)) ? " 分" : ""}</span>`,
       esc(s.points || ""),
